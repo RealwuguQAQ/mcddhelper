@@ -1,28 +1,799 @@
 'use strict';
-const $=id=>document.getElementById(id), cards=window.CARD_DATA, decks=window.DECK_DATA;
-const quantities=new Map();
-const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function config(){const w=Number($('width').value),h=Number($('height').value),g=Number($('gap').value);if(!Number.isFinite(w+h+g)||w<20||w>190||h<20||h>277||g<2||g>10)throw Error('请设置有效尺寸：宽 20–190、高 20–277、间距 2–10 毫米。');const cols=Math.floor((198+g)/(w+g)),rows=Math.floor((285+g)/(h+g));return{w,h,g,cols,rows,capacity:cols*rows};}
-function ordered(){return cards.slice().sort((a,b)=>{const mode=$('sort').value,promoOrder=(a.promo?1:0)-(b.promo?1:0);return (mode==='starsAsc'?a.stars-b.stars||promoOrder:mode==='starsDesc'?b.stars-a.stars||promoOrder:0)||a.code.localeCompare(b.code)||a.rarity.localeCompare(b.rarity)||Number(a.id)-Number(b.id);});}
-function filtered(){const q=$('search').value.trim().toLowerCase(),type=$('type').value,rarity=$('rarity').value;return ordered().filter(c=>(!type||c.type===type)&&(!rarity||c.rarity===rarity)&&(!$('selected').checked||quantities.get(c.id))&&[c.code,c.name,c.text].join(' ').toLowerCase().includes(q));}
-function list(){return ordered().flatMap(c=>Array.from({length:quantities.get(c.id)||0},()=>c));}
-function update(){const n=list().length;$('total').textContent=n;try{const c=config();$('pages').textContent=Math.ceil(n/c.capacity);$('layoutNote').textContent=`A4 纵向 · 每页 ${c.cols} 列 × ${c.rows} 行 · 单面打印`;$('status').textContent='';}catch(e){$('status').textContent=e.message;$('pages').textContent='—';}$('print').disabled=!n;$('preview').disabled=!n;}
-function setQuantity(id,n){if(!cards.some(c=>c.id===id)||!Number.isInteger(n)||n<0||n>99)throw Error('每张卡的份数必须是 0–99 的整数。');quantities.set(id,n);update();}
-function render(){const visible=filtered();$('libraryCount').textContent=`${cards.length} 个版本 · ${new Set(cards.map(c=>c.code)).size} 个卡号`;$('filteredCount').textContent=`匹配 ${visible.length} 个版本`;$('sourceCount').textContent=`${cards.length} 个版本 / ${new Set(cards.map(c=>c.code)).size} 个不同卡号`;$('gallery').innerHTML=visible.map(c=>`<article class="card ${(quantities.get(c.id)||0)?'chosen':''}" data-id="${escapeHtml(c.id)}"><button class="image-button" data-show="${escapeHtml(c.id)}" aria-label="查看 ${escapeHtml(c.name)} 大图"><img src="${escapeHtml(c.image)}" alt="${escapeHtml(c.name)} ${escapeHtml(c.id)}" loading="lazy"></button><h3>${escapeHtml(c.name)}</h3><div class="rarity-label">${escapeHtml(c.rarity)}</div><div class="card-meta"><span>${escapeHtml(c.code)}</span><span>${c.type==='role'?'角色':'行动'}</span></div><div class="counter"><button data-delta="-1" aria-label="减少 ${escapeHtml(c.id)} 份数">−</button><input type="number" min="0" max="99" value="${quantities.get(c.id)||0}" aria-label="${escapeHtml(c.code)} ${escapeHtml(c.rarity)} 打印份数"><button data-delta="1" aria-label="增加 ${escapeHtml(c.id)} 份数">＋</button></div></article>`).join('')||'<p class="empty">没有匹配的卡牌。</p>';update();}
-$('gallery').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const id=b.closest('article').dataset.id;if(b.dataset.show){const c=cards.find(c=>c.id===id);$('largeImage').src=c.image;$('largeImage').alt=c.name;$('imageCaption').textContent=c.code+' · '+c.rarity+' · '+c.name;$('lightbox').showModal();return;}const n=Math.max(0,Math.min(99,(quantities.get(id)||0)+Number(b.dataset.delta)));setQuantity(id,n);render();});
-$('gallery').addEventListener('change',e=>{if(!e.target.matches('input'))return;try{setQuantity(e.target.closest('article').dataset.id,Number(e.target.value));render();}catch(err){$('status').textContent=err.message;}});
-for(const id of ['search','type','selected','rarity','sort'])$(id).addEventListener('input',render);
-for(const id of ['width','height','gap','marks'])$(id).addEventListener('input',update);
-document.querySelectorAll('[data-deck]').forEach(b=>b.onclick=()=>{const d=decks[b.dataset.deck];quantities.clear();for(const id of d.roles)quantities.set(id,(quantities.get(id)||0)+1);for(const [id,n]of Object.entries(d.actions))quantities.set(id,(quantities.get(id)||0)+n);$('deckNote').textContent='已载入：'+d.name+'（同人网站清单，匹配同卡号最低星级版本）';render();});
-$('all').onclick=()=>{cards.forEach(c=>quantities.set(c.id,1));$('deckNote').textContent='已选择全部版本，每个版本 1 份（同卡号可能包含多个星级）。';render();};$('clear').onclick=()=>{quantities.clear();$('deckNote').textContent='已清空选牌。';render();};$('closeImage').onclick=()=>$('lightbox').close();
-function buildSheets(){const c=config(),items=list();if(!items.length)throw Error('请先选择卡牌。');const fragment=document.createDocumentFragment();for(let start=0;start<items.length;start+=c.capacity){const sheet=document.createElement('div');sheet.className='sheet';items.slice(start,start+c.capacity).forEach((card,i)=>{const x=(210-(c.cols*c.w+(c.cols-1)*c.g))/2+(i%c.cols)*(c.w+c.g),y=(297-(c.rows*c.h+(c.rows-1)*c.g))/2+Math.floor(i/c.cols)*(c.h+c.g);const slot=document.createElement('div');slot.className='slot';slot.style.cssText=`left:${x}mm;top:${y}mm;width:${c.w}mm;height:${c.h}mm`;const img=document.createElement('img');img.src=card.image;img.alt=card.code+' '+card.rarity;slot.append(img);sheet.append(slot);if($('marks').checked)for(const xx of [x,x+c.w])for(const yy of [y,y+c.h]){for(const horizontal of [true,false]){const mark=document.createElement('i');mark.className='cut';const beforeX=xx===x,beforeY=yy===y;mark.style.cssText=horizontal?`left:${xx+(beforeX?-0.9:0.2)}mm;top:${yy}mm;width:.7mm;height:.1mm`:`left:${xx}mm;top:${yy+(beforeY?-0.9:0.2)}mm;width:.1mm;height:.7mm`;sheet.append(mark);}}});const label=document.createElement('span');label.className='page-label';label.textContent=`${c.w} × ${c.h} mm | 100% | ${Math.floor(start/c.capacity)+1} / ${Math.ceil(items.length/c.capacity)}`;sheet.append(label);fragment.append(sheet);}$('sheets').replaceChildren(fragment);}
-async function prepare(){try{buildSheets();$('status').textContent='正在检查预览图片…';await Promise.all([...$('sheets').querySelectorAll('img')].map(img=>img.decode()));$('status').textContent='';$('previewPanel').hidden=false;document.body.classList.add('preview-open');window.scrollTo(0,0);}catch(e){$('status').textContent='无法预览：'+e.message;}}
-async function imageAsJpeg(card){let response;try{response=await fetch(new URL(card.image,location.href),{cache:'force-cache'});}catch{throw Error(`无法读取卡图 ${card.code}（${card.rarity}），请刷新页面后重试。`);}if(!response.ok)throw Error(`卡图 ${card.code}（${card.rarity}）加载失败：HTTP ${response.status}`);const objectUrl=URL.createObjectURL(await response.blob());try{const img=new Image();img.src=objectUrl;await img.decode();const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;const ctx=canvas.getContext('2d',{alpha:false});ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0);return canvas.toDataURL('image/jpeg',.94);}finally{URL.revokeObjectURL(objectUrl);}}
-function drawCropMarks(pdf,x,y,w,h){pdf.setDrawColor(70);pdf.setLineWidth(.08);const inside=.2,outside=.9;for(const xx of [x,x+w])for(const yy of [y,y+h]){const left=xx===x,top=yy===y;pdf.line(xx+(left?-outside:inside),yy,xx+(left?-inside:outside),yy);pdf.line(xx,yy+(top?-outside:inside),xx,yy+(top?-inside:outside));}}
-async function downloadPdf(){const buttons=[$('print'),$('printPreview')];try{const c=config(),items=list();if(!items.length)throw Error('请先选择卡牌。');if(!window.jspdf?.jsPDF)throw Error('PDF 组件未加载，请刷新页面后重试。');buttons.forEach(b=>b.disabled=true);const pages=Math.ceil(items.length/c.capacity),pdf=new window.jspdf.jsPDF({orientation:'portrait',unit:'mm',format:'a4',compress:true,putOnlyUsedFonts:true});pdf.setProperties({title:'鸣潮对决卡牌打印文件',subject:`${items.length} 张卡牌，${c.w} × ${c.h} mm`});const cache=new Map();for(let i=0;i<items.length;i++){const card=items[i],page=Math.floor(i/c.capacity);if(i&&i%c.capacity===0)pdf.addPage('a4','portrait');const pos=i%c.capacity,x=(210-(c.cols*c.w+(c.cols-1)*c.g))/2+(pos%c.cols)*(c.w+c.g),y=(297-(c.rows*c.h+(c.rows-1)*c.g))/2+Math.floor(pos/c.cols)*(c.h+c.g);let jpeg=cache.get(card.id);if(!jpeg){$('status').textContent=`正在生成彩色 PDF：${i+1} / ${items.length} 张…`;await new Promise(requestAnimationFrame);jpeg=await imageAsJpeg(card);cache.set(card.id,jpeg);}pdf.addImage(jpeg,'JPEG',x,y,c.w,c.h,`card-${card.id}`,'FAST');if($('marks').checked)drawCropMarks(pdf,x,y,c.w,c.h);if(pos===c.capacity-1||i===items.length-1){pdf.setFontSize(7);pdf.setTextColor(90);pdf.text(`${c.w} x ${c.h} mm | 100% | ${page+1} / ${pages}`,10,293);}}$('status').textContent='正在准备下载…';const blob=pdf.output('blob'),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`鸣潮对决_彩色打印_${items.length}张_${new Date().toISOString().slice(0,10)}.pdf`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);$('status').textContent=`已生成 ${pages} 页彩色 PDF，请查看浏览器下载记录。`;}catch(e){$('status').textContent='无法生成 PDF：'+e.message;}finally{buttons.forEach(b=>b.disabled=!list().length);}}
-$('preview').onclick=prepare;$('print').onclick=downloadPdf;$('closePreview').onclick=()=>{$('previewPanel').hidden=true;document.body.classList.remove('preview-open');};
-if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'set_print_quantities',description:'批量设置卡牌打印份数，更新当前打印清单。',inputSchema:{type:'object',properties:{items:{type:'array',items:{type:'object',properties:{id:{type:'string'},quantity:{type:'integer',minimum:0,maximum:99}},required:['id','quantity'],additionalProperties:false}}},required:['items'],additionalProperties:false},annotations:{readOnlyHint:false},execute(input){if(!Array.isArray(input?.items)||input.items.some(x=>!cards.some(c=>c.id===x.id)||!Number.isInteger(x.quantity)||x.quantity<0||x.quantity>99))throw Error('卡号或份数无效');input.items.forEach(x=>quantities.set(x.id,x.quantity));render();return{total:list().length};}})).catch(()=>{});}catch{}}
-const rarities=[...new Set(cards.map(c=>c.rarity))].sort((a,b)=>(a.match(/★/g)||[]).length-(b.match(/★/g)||[]).length||a.localeCompare(b));for(const r of rarities){const option=document.createElement('option');option.value=r;option.textContent=r+'（'+cards.filter(c=>c.rarity===r).length+'）';$('rarity').append(option);}
-$('applyBatch').onclick=()=>{const n=Number($('batchQty').value);if(!Number.isInteger(n)||n<0||n>99){$('status').textContent='批量份数必须为 0–99 的整数。';return;}const matched=filtered();matched.forEach(c=>quantities.set(c.id,n));render();$('deckNote').textContent=`已将 ${matched.length} 个匹配版本设为各 ${n} 份；其他选择保持不变。`;};
-render();
-$('printPreview').onclick=downloadPdf;
+
+const $ = id => document.getElementById(id);
+const cards = window.CARD_DATA || [];
+const presets = window.DECK_DATA || {};
+const cardsById = new Map(cards.map(card => [String(card.id), card]));
+const quantities = new Map();
+const STORAGE_KEY = 'mcdd-saved-decks-v1';
+const DRAFT_KEY = 'mcdd-current-deck-v1';
+const PUBLICATIONS_KEY = 'mcdd-shared-decks-v1';
+
+let activeDeckId = null;
+let dirty = false;
+let incomingDeck = null;
+
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[char]));
+
+function setStatus(message, tone = '') {
+  $('status').textContent = message;
+  $('status').className = tone;
+}
+
+function makeId() {
+  return globalThis.crypto?.randomUUID?.() || `deck-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function readStorage(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStorage(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function cleanQuantities(raw) {
+  const result = {};
+  const entries = Array.isArray(raw) ? raw : Object.entries(raw || {});
+  for (const entry of entries) {
+    const [rawId, rawQuantity] = Array.isArray(entry) ? entry : [];
+    const id = String(rawId);
+    const quantity = Number(rawQuantity);
+    if (cardsById.has(id) && Number.isInteger(quantity) && quantity > 0 && quantity <= 99) {
+      result[id] = quantity;
+    }
+  }
+  return result;
+}
+
+function normalizeDeck(raw, fallbackId = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : fallbackId || makeId(),
+    name: String(raw.name || '未命名卡组').slice(0, 40),
+    description: String(raw.description || '').slice(0, 300),
+    cards: cleanQuantities(raw.cards),
+    createdAt: raw.createdAt || new Date().toISOString(),
+    updatedAt: raw.updatedAt || new Date().toISOString()
+  };
+}
+
+function currentSnapshot(overrides = {}) {
+  return normalizeDeck({
+    id: activeDeckId || makeId(),
+    name: $('deckName').value.trim() || '未命名卡组',
+    description: $('deckDescription').value.trim(),
+    cards: Object.fromEntries([...quantities].filter(([, quantity]) => quantity > 0)),
+    createdAt: overrides.createdAt,
+    updatedAt: new Date().toISOString(),
+    ...overrides
+  });
+}
+
+function persistDraft() {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(currentSnapshot({ id: activeDeckId || 'draft' })));
+  } catch {
+    setStatus('浏览器无法保存当前草稿，请检查隐私或存储设置。', 'error');
+  }
+}
+
+function restoreDraft() {
+  try {
+    const draft = normalizeDeck(JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'), 'draft');
+    if (!draft) return;
+    $('deckName').value = draft.name;
+    $('deckDescription').value = draft.description;
+    quantities.clear();
+    Object.entries(draft.cards).forEach(([id, quantity]) => quantities.set(id, quantity));
+    activeDeckId = draft.id === 'draft' ? null : draft.id;
+  } catch {
+    localStorage.removeItem(DRAFT_KEY);
+  }
+}
+
+function markDirty() {
+  dirty = true;
+  persistDraft();
+}
+
+function ordered() {
+  return cards.slice().sort((a, b) => {
+    const mode = $('sort').value;
+    const promoOrder = Number(Boolean(a.promo)) - Number(Boolean(b.promo));
+    const primary = mode === 'starsAsc'
+      ? a.stars - b.stars || promoOrder
+      : mode === 'starsDesc'
+        ? b.stars - a.stars || promoOrder
+        : 0;
+    return primary || a.code.localeCompare(b.code) || a.rarity.localeCompare(b.rarity) || Number(a.id) - Number(b.id);
+  });
+}
+
+function filtered() {
+  const query = $('search').value.trim().toLowerCase();
+  const type = $('type').value;
+  const rarity = $('rarity').value;
+  return ordered().filter(card =>
+    (!type || card.type === type) &&
+    (!rarity || card.rarity === rarity) &&
+    (!$('selected').checked || quantities.get(String(card.id))) &&
+    [card.code, card.name, card.text].join(' ').toLowerCase().includes(query)
+  );
+}
+
+function selectedCards(source = quantities) {
+  return ordered().flatMap(card => Array.from({ length: source.get(String(card.id)) || 0 }, () => card));
+}
+
+function aggregateCodes(source = quantities) {
+  const result = new Map();
+  for (const [id, quantity] of source) {
+    if (!quantity) continue;
+    const card = cardsById.get(String(id));
+    if (!card) continue;
+    const current = result.get(card.code) || { card, quantity: 0 };
+    current.quantity += quantity;
+    result.set(card.code, current);
+  }
+  return result;
+}
+
+function exclusiveCharacters(card) {
+  if (Array.isArray(card.exclusiveCharacters)) return card.exclusiveCharacters.filter(Boolean);
+  if (typeof card.exclusiveCharacter === 'string' && card.exclusiveCharacter.trim()) return [card.exclusiveCharacter.trim()];
+  return [];
+}
+
+function hasExclusiveField(card) {
+  return Object.prototype.hasOwnProperty.call(card, 'exclusiveCharacter') ||
+    Object.prototype.hasOwnProperty.call(card, 'exclusiveCharacters');
+}
+
+function analyzeDeck(source = quantities) {
+  const codeTotals = aggregateCodes(source);
+  const roleCards = [];
+  const actionCards = [];
+  for (const [id, quantity] of source) {
+    if (!quantity) continue;
+    const card = cardsById.get(String(id));
+    if (!card) continue;
+    (card.type === 'role' ? roleCards : actionCards).push({ card, quantity });
+  }
+
+  const roleTotal = roleCards.reduce((sum, item) => sum + item.quantity, 0);
+  const actionTotal = actionCards.reduce((sum, item) => sum + item.quantity, 0);
+  const characterNames = [...new Set(roleCards.map(item => item.card.name))];
+  const errors = [];
+  const warnings = [];
+
+  if (roleTotal < 3 || roleTotal > 15) errors.push(`角色卡组需要 3–15 张，目前 ${roleTotal} 张。`);
+  if (characterNames.length !== 3) errors.push(`角色卡组需要恰好 3 种角色，目前 ${characterNames.length} 种。`);
+
+  for (const name of characterNames) {
+    const levelZeroCount = roleCards
+      .filter(item => item.card.name === name && Number(item.card.level) === 0)
+      .reduce((sum, item) => sum + item.quantity, 0);
+    if (levelZeroCount !== 1) errors.push(`角色“${name}”需要恰好 1 张 0 级卡，目前 ${levelZeroCount} 张。`);
+  }
+
+  for (const { card, quantity } of codeTotals.values()) {
+    const maximum = card.type === 'role' ? 1 : 3;
+    if (quantity > maximum) errors.push(`${card.code} 的不同版本合计 ${quantity} 张，最多 ${maximum} 张。`);
+  }
+
+  if (actionTotal !== 40) errors.push(`行动卡组需要正好 40 张，目前 ${actionTotal} 张。`);
+
+  const roleNameSet = new Set(characterNames);
+  let unknownExclusiveCards = 0;
+  for (const { card } of actionCards) {
+    if (!hasExclusiveField(card)) {
+      unknownExclusiveCards += 1;
+      continue;
+    }
+    const exclusive = exclusiveCharacters(card);
+    if (exclusive.length && !exclusive.some(name => roleNameSet.has(name))) {
+      errors.push(`${card.code}“${card.name}”的专属角色不在角色卡组中。`);
+    }
+  }
+  if (unknownExclusiveCards) warnings.push('专属角色字段尚未补全，专属行动卡限制暂未参与自动校验。');
+
+  return { roleTotal, actionTotal, characterNames, codeTotals, errors, warnings };
+}
+
+function config() {
+  const width = Number($('width').value);
+  const height = Number($('height').value);
+  const gap = Number($('gap').value);
+  if (!Number.isFinite(width + height + gap) || width < 20 || width > 190 || height < 20 || height > 277 || gap < 2 || gap > 10) {
+    throw Error('请设置有效尺寸：宽 20–190、高 20–277、间距 2–10 毫米。');
+  }
+  const columns = Math.floor((198 + gap) / (width + gap));
+  const rows = Math.floor((285 + gap) / (height + gap));
+  if (!columns || !rows) throw Error('当前卡片尺寸和间距无法排入 A4 页面。');
+  return { width, height, gap, columns, rows, capacity: columns * rows };
+}
+
+function setQuantity(id, quantity) {
+  const normalizedId = String(id);
+  if (!cardsById.has(normalizedId) || !Number.isInteger(quantity) || quantity < 0 || quantity > 99) {
+    throw Error('每个卡图版本的份数必须是 0–99 的整数。');
+  }
+  if (quantity) quantities.set(normalizedId, quantity);
+  else quantities.delete(normalizedId);
+  markDirty();
+}
+
+function renderGallery() {
+  const visible = filtered();
+  const codeTotals = aggregateCodes();
+  $('libraryCount').textContent = `${cards.length} 个版本 · ${new Set(cards.map(card => card.code)).size} 个卡号`;
+  $('filteredCount').textContent = `匹配 ${visible.length} 个版本`;
+  $('sourceCount').textContent = `${cards.length} 个版本 / ${new Set(cards.map(card => card.code)).size} 个不同卡号`;
+  $('gallery').innerHTML = visible.map(card => {
+    const quantity = quantities.get(String(card.id)) || 0;
+    const logicalQuantity = codeTotals.get(card.code)?.quantity || 0;
+    const limit = card.type === 'role' ? 1 : 3;
+    return `<article class="card ${quantity ? 'chosen' : ''}" data-id="${escapeHtml(card.id)}">
+      <button class="image-button" data-show="${escapeHtml(card.id)}" aria-label="查看 ${escapeHtml(card.name)} 大图"><img src="${escapeHtml(card.image)}" alt="${escapeHtml(card.name)} ${escapeHtml(card.id)}" loading="lazy"></button>
+      <div class="card-title"><h3 title="${escapeHtml(card.name)}">${escapeHtml(card.name)}</h3><span>${escapeHtml(card.rarity)}</span></div>
+      <div class="card-meta"><span>${escapeHtml(card.code)}</span><span>${card.type === 'role' ? `角色 · ${escapeHtml(card.level)}级` : '行动'}</span></div>
+      <div class="code-limit ${logicalQuantity > limit ? 'over' : ''}">同编号合计 ${logicalQuantity} / ${limit}</div>
+      <div class="counter"><button data-delta="-1" aria-label="减少 ${escapeHtml(card.id)} 份数">−</button><input type="number" min="0" max="99" value="${quantity}" aria-label="${escapeHtml(card.code)} ${escapeHtml(card.rarity)} 份数"><button data-delta="1" aria-label="增加 ${escapeHtml(card.id)} 份数">＋</button></div>
+    </article>`;
+  }).join('') || '<p class="empty">没有匹配的卡牌。</p>';
+}
+
+function renderValidation() {
+  const analysis = analyzeDeck();
+  $('roleTotal').textContent = analysis.roleTotal;
+  $('actionTotal').textContent = analysis.actionTotal;
+  $('characterKinds').textContent = `${analysis.characterNames.length} / 3`;
+  const state = $('validationState');
+  if (analysis.errors.length) {
+    state.className = 'validation-state invalid';
+    state.textContent = `草稿 · ${analysis.errors.length} 项需要调整`;
+  } else if (analysis.warnings.length) {
+    state.className = 'validation-state warning';
+    state.textContent = '基础规则通过 · 仍有字段待校验';
+  } else {
+    state.className = 'validation-state valid';
+    state.textContent = '卡组符合当前全部构筑规则';
+  }
+  const messages = [
+    ...analysis.errors.map(text => ({ text, type: 'error' })),
+    ...analysis.warnings.map(text => ({ text, type: 'warning' }))
+  ];
+  $('validationList').innerHTML = messages.slice(0, 8).map(item => `<li class="${item.type}">${escapeHtml(item.text)}</li>`).join('');
+  if (messages.length > 8) $('validationList').insertAdjacentHTML('beforeend', `<li>另有 ${messages.length - 8} 项提示。</li>`);
+  return analysis;
+}
+
+function updatePrintStats() {
+  const count = selectedCards().length;
+  $('total').textContent = count;
+  $('print').disabled = !count;
+  $('preview').disabled = !count;
+  try {
+    const page = config();
+    $('pages').textContent = Math.ceil(count / page.capacity);
+    $('layoutNote').textContent = `A4 纵向 · 每页 ${page.columns} 列 × ${page.rows} 行 · 单面打印`;
+  } catch (error) {
+    $('pages').textContent = '—';
+    $('layoutNote').textContent = error.message;
+  }
+}
+
+function renderPrintSummary() {
+  const selected = ordered().filter(card => quantities.get(String(card.id)));
+  if (!selected.length) {
+    $('printDeckSummary').innerHTML = '<p class="empty-panel">当前卡组还没有卡牌，请先返回编辑卡组。</p>';
+    return;
+  }
+  const renderGroup = (title, type) => {
+    const group = selected.filter(card => card.type === type);
+    const total = group.reduce((sum, card) => sum + quantities.get(String(card.id)), 0);
+    return `<section class="print-group"><h2>${title}<small>${total} 张</small></h2><div class="print-card-list">${group.map(card => `<article><img src="${escapeHtml(card.image)}" alt=""><div><strong>${escapeHtml(card.name)}</strong><span>${escapeHtml(card.code)} · ${escapeHtml(card.rarity)}</span></div><b>× ${quantities.get(String(card.id))}</b></article>`).join('')}</div></section>`;
+  };
+  $('printDeckSummary').innerHTML = renderGroup('角色卡组', 'role') + renderGroup('行动卡组', 'action');
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function deckCounts(deck) {
+  const source = new Map(Object.entries(cleanQuantities(deck.cards)));
+  const analysis = analyzeDeck(source);
+  return `${analysis.roleTotal} 张角色卡 · ${analysis.actionTotal} 张行动卡`;
+}
+
+function renderSavedDecks() {
+  const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  $('savedDecks').innerHTML = saved.length ? saved.map(deck => `<article class="deck-row">
+    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
+    <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}">载入</button><button data-copy-deck="${escapeHtml(deck.id)}">复制</button><button data-share-deck="${escapeHtml(deck.id)}">分享</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}">删除</button></div>
+  </article>`).join('') : '<p class="empty-panel">还没有保存的卡组。编辑一副卡组后点击“保存卡组”。</p>';
+}
+
+function renderPublishedDecks() {
+  const published = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  $('publishedDecks').innerHTML = published.length ? published.map(deck => `<article class="deck-row">
+    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span>${escapeHtml(deckCounts(deck))} · 分享于 ${escapeHtml(formatDate(deck.publishedAt || deck.updatedAt))}</span></div>
+    <div class="row-actions"><button data-load-published="${escapeHtml(deck.id)}">查看并复制</button><button data-link-published="${escapeHtml(deck.id)}">复制链接</button><button class="danger" data-delete-published="${escapeHtml(deck.id)}">删除记录</button></div>
+  </article>`).join('') : '<p class="empty-panel">还没有分享记录。点击“分享当前卡组”生成公开链接。</p>';
+}
+
+function renderIncomingDeck() {
+  if (!incomingDeck) {
+    $('incomingDeck').innerHTML = '<div class="shared-placeholder"><strong>通过分享链接查看别人的卡组</strong><span>打开含有卡组数据的链接后，卡组详情会显示在这里。</span></div>';
+    return;
+  }
+  const analysis = analyzeDeck(new Map(Object.entries(incomingDeck.cards)));
+  const state = analysis.errors.length ? `草稿，${analysis.errors.length} 项基础规则未通过` : '基础规则通过';
+  $('incomingDeck').innerHTML = `<article class="shared-deck"><p class="eyebrow">收到的卡组</p><h2>${escapeHtml(incomingDeck.name)}</h2><p>${escapeHtml(incomingDeck.description || '暂无说明')}</p><div class="shared-meta"><span>${analysis.roleTotal} 张角色卡</span><span>${analysis.actionTotal} 张行动卡</span><span>${escapeHtml(state)}</span></div><div class="row-actions"><button id="copyIncoming" class="primary">复制到我的编辑器</button><button id="printIncoming">载入并打印</button></div></article>`;
+}
+
+function renderAll() {
+  renderGallery();
+  renderValidation();
+  updatePrintStats();
+  renderPrintSummary();
+  renderSavedDecks();
+  renderPublishedDecks();
+  renderIncomingDeck();
+  $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'}${dirty ? ' · 未保存' : ''}`;
+}
+
+function setView(view) {
+  for (const button of document.querySelectorAll('[data-view]')) {
+    button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false');
+  }
+  for (const section of document.querySelectorAll('.view')) {
+    const active = section.id === `${view}View`;
+    section.hidden = !active;
+    section.classList.toggle('active', active);
+  }
+  const printing = view === 'print';
+  $('deckAside').hidden = printing;
+  $('printAside').hidden = !printing;
+  document.body.dataset.view = view;
+  if (printing) renderPrintSummary();
+  if (view === 'saved') renderSavedDecks();
+  if (view === 'community') {
+    renderIncomingDeck();
+    renderPublishedDecks();
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function loadDeck(deck, copy = false, destination = 'editor') {
+  const normalized = normalizeDeck(deck);
+  if (!normalized) return;
+  quantities.clear();
+  Object.entries(normalized.cards).forEach(([id, quantity]) => quantities.set(id, quantity));
+  $('deckName').value = copy ? `${normalized.name}（副本）`.slice(0, 40) : normalized.name;
+  $('deckDescription').value = normalized.description;
+  activeDeckId = copy ? null : normalized.id;
+  dirty = copy;
+  persistDraft();
+  renderAll();
+  setView(destination);
+  setStatus(copy ? '已复制到编辑器，可以继续修改。' : `已载入“${normalized.name}”。`, 'success');
+}
+
+function saveCurrentDeck() {
+  try {
+    const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+    const existing = saved.find(item => item.id === activeDeckId);
+    const snapshot = currentSnapshot({ id: activeDeckId || makeId(), createdAt: existing?.createdAt || new Date().toISOString() });
+    const index = saved.findIndex(item => item.id === snapshot.id);
+    if (index >= 0) saved[index] = snapshot;
+    else saved.unshift(snapshot);
+    writeStorage(STORAGE_KEY, saved);
+    activeDeckId = snapshot.id;
+    dirty = false;
+    persistDraft();
+    renderAll();
+    setStatus(`已保存“${snapshot.name}”到这台设备。`, 'success');
+  } catch (error) {
+    setStatus(`保存失败：${error.message}`, 'error');
+  }
+}
+
+function encodeDeck(deck) {
+  const payload = JSON.stringify({ v: 1, name: deck.name, description: deck.description, cards: Object.entries(deck.cards) });
+  const bytes = new TextEncoder().encode(payload);
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodeDeck(encoded) {
+  try {
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+    const bytes = Uint8Array.from(atob(padded), char => char.charCodeAt(0));
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    if (parsed.v !== 1) return null;
+    return normalizeDeck({ name: parsed.name, description: parsed.description, cards: parsed.cards });
+  } catch {
+    return null;
+  }
+}
+
+function shareUrl(deck) {
+  return `${location.href.split('#')[0]}#deck=${encodeDeck(deck)}`;
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const area = document.createElement('textarea');
+  area.value = value;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  document.execCommand('copy');
+  area.remove();
+}
+
+async function publishDeck(deck = currentSnapshot()) {
+  const snapshot = normalizeDeck(deck);
+  const url = shareUrl(snapshot);
+  $('shareLinkOutput').value = url;
+  $('shareResult').hidden = false;
+  const records = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  records.unshift({ ...snapshot, id: makeId(), shareUrl: url, publishedAt: new Date().toISOString() });
+  writeStorage(PUBLICATIONS_KEY, records.slice(0, 30));
+  renderPublishedDecks();
+  try {
+    await copyText(url);
+    setStatus('分享链接已复制。对方打开后可以查看、复制或打印这副卡组。', 'success');
+  } catch {
+    setStatus('无法自动复制，请手动复制页面中显示的分享链接。', 'error');
+  }
+}
+
+function initializeIncomingDeck() {
+  const match = location.hash.match(/^#deck=([A-Za-z0-9_-]+)$/);
+  if (!match) return;
+  incomingDeck = decodeDeck(match[1]);
+  if (incomingDeck) setView('community');
+  else setStatus('分享链接中的卡组数据无效或已经损坏。', 'error');
+}
+
+$('gallery').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  const article = button.closest('article');
+  const id = article?.dataset.id;
+  if (!id) return;
+  if (button.dataset.show) {
+    const card = cardsById.get(id);
+    $('largeImage').src = card.image;
+    $('largeImage').alt = card.name;
+    $('imageCaption').textContent = `${card.code} · ${card.rarity} · ${card.name}`;
+    $('lightbox').showModal();
+    return;
+  }
+  try {
+    const next = Math.max(0, Math.min(99, (quantities.get(id) || 0) + Number(button.dataset.delta)));
+    setQuantity(id, next);
+    renderAll();
+  } catch (error) {
+    setStatus(error.message, 'error');
+  }
+});
+
+$('gallery').addEventListener('change', event => {
+  if (!event.target.matches('input')) return;
+  try {
+    setQuantity(event.target.closest('article').dataset.id, Number(event.target.value));
+    renderAll();
+  } catch (error) {
+    setStatus(error.message, 'error');
+  }
+});
+
+for (const id of ['search', 'type', 'selected', 'rarity', 'sort']) $(id).addEventListener('input', renderGallery);
+for (const id of ['width', 'height', 'gap', 'marks']) $(id).addEventListener('input', updatePrintStats);
+for (const id of ['deckName', 'deckDescription']) $(id).addEventListener('input', () => { markDirty(); $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'} · 未保存`; });
+for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => setView(button.dataset.view));
+for (const button of document.querySelectorAll('[data-go-editor]')) button.addEventListener('click', () => setView('editor'));
+
+for (const button of document.querySelectorAll('[data-deck]')) {
+  button.addEventListener('click', () => {
+    const deck = presets[button.dataset.deck];
+    quantities.clear();
+    deck.roles.forEach(id => quantities.set(String(id), (quantities.get(String(id)) || 0) + 1));
+    Object.entries(deck.actions).forEach(([id, quantity]) => quantities.set(String(id), quantity));
+    $('deckName').value = deck.name;
+    $('deckDescription').value = '由网站内置起始卡组载入。';
+    activeDeckId = null;
+    dirty = true;
+    persistDraft();
+    $('deckNote').textContent = `已载入：${deck.name}。同卡号的不同稀有度会合并校验。`;
+    renderAll();
+  });
+}
+
+$('newDeck').addEventListener('click', () => {
+  quantities.clear();
+  $('deckName').value = '未命名卡组';
+  $('deckDescription').value = '';
+  activeDeckId = null;
+  dirty = true;
+  persistDraft();
+  renderAll();
+  setStatus('已建立空白卡组。', 'success');
+});
+
+$('all').addEventListener('click', () => {
+  cards.forEach(card => quantities.set(String(card.id), 1));
+  markDirty();
+  $('deckNote').textContent = '已选择全部卡图版本，每个版本 1 份；这通常不是合法卡组，但可以用于整库打印。';
+  renderAll();
+});
+
+$('clear').addEventListener('click', () => {
+  quantities.clear();
+  markDirty();
+  $('deckNote').textContent = '已清空当前选牌。';
+  renderAll();
+});
+
+$('applyBatch').addEventListener('click', () => {
+  const quantity = Number($('batchQty').value);
+  if (!Number.isInteger(quantity) || quantity < 0 || quantity > 99) {
+    setStatus('批量份数必须是 0–99 的整数。', 'error');
+    return;
+  }
+  const matched = filtered();
+  matched.forEach(card => {
+    if (quantity) quantities.set(String(card.id), quantity);
+    else quantities.delete(String(card.id));
+  });
+  markDirty();
+  $('deckNote').textContent = `已将 ${matched.length} 个匹配版本设为各 ${quantity} 份；其他选择保持不变。`;
+  renderAll();
+});
+
+for (const id of ['saveCurrent', 'saveCurrentTop']) $(id).addEventListener('click', saveCurrentDeck);
+$('goPrint').addEventListener('click', () => setView('print'));
+$('shareCurrent').addEventListener('click', () => publishDeck());
+$('closeImage').addEventListener('click', () => $('lightbox').close());
+
+$('savedDecks').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  const id = button.dataset.loadDeck || button.dataset.copyDeck || button.dataset.shareDeck || button.dataset.deleteDeck;
+  const deck = saved.find(item => item.id === id);
+  if (!deck) return;
+  if (button.dataset.loadDeck) loadDeck(deck);
+  if (button.dataset.copyDeck) loadDeck(deck, true);
+  if (button.dataset.shareDeck) publishDeck(deck);
+  if (button.dataset.deleteDeck) {
+    writeStorage(STORAGE_KEY, saved.filter(item => item.id !== id));
+    if (activeDeckId === id) activeDeckId = null;
+    renderAll();
+    setStatus(`已删除“${deck.name}”的本地保存记录。`, 'success');
+  }
+});
+
+$('publishedDecks').addEventListener('click', async event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  const records = readStorage(PUBLICATIONS_KEY);
+  const id = button.dataset.loadPublished || button.dataset.linkPublished || button.dataset.deletePublished;
+  const record = records.find(item => item.id === id);
+  if (!record) return;
+  if (button.dataset.loadPublished) loadDeck(record, true);
+  if (button.dataset.linkPublished) {
+    try { await copyText(record.shareUrl || shareUrl(record)); setStatus('分享链接已复制。', 'success'); }
+    catch { setStatus('无法访问剪贴板，请重新点击“分享当前卡组”。', 'error'); }
+  }
+  if (button.dataset.deletePublished) {
+    writeStorage(PUBLICATIONS_KEY, records.filter(item => item.id !== id));
+    renderPublishedDecks();
+    setStatus('已删除本机分享记录，已经发出的链接仍然有效。', 'success');
+  }
+});
+
+$('incomingDeck').addEventListener('click', event => {
+  if (!incomingDeck) return;
+  if (event.target.closest('#copyIncoming')) loadDeck(incomingDeck, true);
+  if (event.target.closest('#printIncoming')) loadDeck(incomingDeck, true, 'print');
+});
+
+function buildSheets() {
+  const page = config();
+  const items = selectedCards();
+  if (!items.length) throw Error('请先选择卡牌。');
+  const fragment = document.createDocumentFragment();
+  for (let start = 0; start < items.length; start += page.capacity) {
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    items.slice(start, start + page.capacity).forEach((card, index) => {
+      const x = (210 - (page.columns * page.width + (page.columns - 1) * page.gap)) / 2 + (index % page.columns) * (page.width + page.gap);
+      const y = (297 - (page.rows * page.height + (page.rows - 1) * page.gap)) / 2 + Math.floor(index / page.columns) * (page.height + page.gap);
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.style.cssText = `left:${x}mm;top:${y}mm;width:${page.width}mm;height:${page.height}mm`;
+      const image = document.createElement('img');
+      image.src = card.image;
+      image.alt = `${card.code} ${card.rarity}`;
+      slot.append(image);
+      sheet.append(slot);
+      if ($('marks').checked) {
+        for (const markX of [x, x + page.width]) for (const markY of [y, y + page.height]) for (const horizontal of [true, false]) {
+          const mark = document.createElement('i');
+          mark.className = 'cut';
+          const beforeX = markX === x;
+          const beforeY = markY === y;
+          mark.style.cssText = horizontal
+            ? `left:${markX + (beforeX ? -0.9 : 0.2)}mm;top:${markY}mm;width:.7mm;height:.1mm`
+            : `left:${markX}mm;top:${markY + (beforeY ? -0.9 : 0.2)}mm;width:.1mm;height:.7mm`;
+          sheet.append(mark);
+        }
+      }
+    });
+    const label = document.createElement('span');
+    label.className = 'page-label';
+    label.textContent = `${page.width} × ${page.height} mm | 100% | ${Math.floor(start / page.capacity) + 1} / ${Math.ceil(items.length / page.capacity)}`;
+    sheet.append(label);
+    fragment.append(sheet);
+  }
+  $('sheets').replaceChildren(fragment);
+}
+
+async function preparePreview() {
+  try {
+    buildSheets();
+    setStatus('正在检查预览图片…');
+    await Promise.all([...$('sheets').querySelectorAll('img')].map(image => image.decode()));
+    setStatus('');
+    $('previewPanel').hidden = false;
+    document.body.classList.add('preview-open');
+    window.scrollTo(0, 0);
+  } catch (error) {
+    setStatus(`无法预览：${error.message}`, 'error');
+  }
+}
+
+async function imageAsJpeg(card) {
+  const image = new Image();
+  image.src = card.image;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext('2d', { alpha: false });
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.94);
+}
+
+function drawCropMarks(pdf, x, y, width, height) {
+  pdf.setDrawColor(70);
+  pdf.setLineWidth(0.08);
+  const inside = 0.2;
+  const outside = 0.9;
+  for (const markX of [x, x + width]) for (const markY of [y, y + height]) {
+    const left = markX === x;
+    const top = markY === y;
+    pdf.line(markX + (left ? -outside : inside), markY, markX + (left ? -inside : outside), markY);
+    pdf.line(markX, markY + (top ? -outside : inside), markX, markY + (top ? -inside : outside));
+  }
+}
+
+async function downloadPdf() {
+  const buttons = [$('print'), $('printPreview')];
+  try {
+    const page = config();
+    const items = selectedCards();
+    if (!items.length) throw Error('请先选择卡牌。');
+    if (!window.jspdf?.jsPDF) throw Error('PDF 组件未加载，请刷新页面后重试。');
+    buttons.forEach(button => { button.disabled = true; });
+    const pageCount = Math.ceil(items.length / page.capacity);
+    const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true, putOnlyUsedFonts: true });
+    pdf.setProperties({ title: `${$('deckName').value.trim() || '鸣潮对决'}打印文件`, subject: `${items.length} 张卡牌，${page.width} × ${page.height} mm` });
+    const cache = new Map();
+    for (let index = 0; index < items.length; index += 1) {
+      const card = items[index];
+      const sheetIndex = Math.floor(index / page.capacity);
+      if (index && index % page.capacity === 0) pdf.addPage('a4', 'portrait');
+      const position = index % page.capacity;
+      const x = (210 - (page.columns * page.width + (page.columns - 1) * page.gap)) / 2 + (position % page.columns) * (page.width + page.gap);
+      const y = (297 - (page.rows * page.height + (page.rows - 1) * page.gap)) / 2 + Math.floor(position / page.columns) * (page.height + page.gap);
+      let jpeg = cache.get(card.id);
+      if (!jpeg) {
+        setStatus(`正在生成彩色 PDF：${index + 1} / ${items.length} 张…`);
+        await new Promise(requestAnimationFrame);
+        jpeg = await imageAsJpeg(card);
+        cache.set(card.id, jpeg);
+      }
+      pdf.addImage(jpeg, 'JPEG', x, y, page.width, page.height, `card-${card.id}`, 'FAST');
+      if ($('marks').checked) drawCropMarks(pdf, x, y, page.width, page.height);
+      if (position === page.capacity - 1 || index === items.length - 1) {
+        pdf.setFontSize(7);
+        pdf.setTextColor(90);
+        pdf.text(`${page.width} x ${page.height} mm | 100% | ${sheetIndex + 1} / ${pageCount}`, 10, 293);
+      }
+    }
+    setStatus('正在准备下载…');
+    const blob = pdf.output('blob');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeName = ($('deckName').value.trim() || '鸣潮对决卡组').replace(/[\\/:*?"<>|]/g, '_');
+    link.href = url;
+    link.download = `${safeName}_${items.length}张_${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setStatus(`已生成 ${pageCount} 页彩色 PDF，请查看浏览器下载记录。`, 'success');
+  } catch (error) {
+    setStatus(`无法生成 PDF：${error.message}`, 'error');
+  } finally {
+    buttons.forEach(button => { button.disabled = !selectedCards().length; });
+  }
+}
+
+$('preview').addEventListener('click', preparePreview);
+$('print').addEventListener('click', downloadPdf);
+$('printPreview').addEventListener('click', downloadPdf);
+$('closePreview').addEventListener('click', () => {
+  $('previewPanel').hidden = true;
+  document.body.classList.remove('preview-open');
+});
+
+if (document.modelContext?.registerTool) {
+  try {
+    Promise.resolve(document.modelContext.registerTool({
+      name: 'set_deck_quantities',
+      description: '批量设置当前《鸣潮：对决》卡组中具体卡图版本的数量。',
+      inputSchema: {
+        type: 'object',
+        properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, quantity: { type: 'integer', minimum: 0, maximum: 99 } }, required: ['id', 'quantity'], additionalProperties: false } } },
+        required: ['items'],
+        additionalProperties: false
+      },
+      annotations: { readOnlyHint: false },
+      execute(input) {
+        if (!Array.isArray(input?.items) || input.items.some(item => !cardsById.has(String(item.id)) || !Number.isInteger(item.quantity) || item.quantity < 0 || item.quantity > 99)) throw Error('卡图版本或份数无效');
+        input.items.forEach(item => setQuantity(String(item.id), item.quantity));
+        renderAll();
+        const analysis = analyzeDeck();
+        return { roleTotal: analysis.roleTotal, actionTotal: analysis.actionTotal, errors: analysis.errors };
+      }
+    })).catch(() => {});
+  } catch {}
+}
+
+const rarities = [...new Set(cards.map(card => card.rarity))].sort((a, b) =>
+  (a.match(/★/g) || []).length - (b.match(/★/g) || []).length || a.localeCompare(b)
+);
+for (const rarity of rarities) {
+  const option = document.createElement('option');
+  option.value = rarity;
+  option.textContent = `${rarity}（${cards.filter(card => card.rarity === rarity).length}）`;
+  $('rarity').append(option);
+}
+
+restoreDraft();
+renderAll();
+initializeIncomingDeck();
