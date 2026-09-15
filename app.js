@@ -420,7 +420,7 @@ function renderSavedDecks() {
   const source = authUser ? 'cloud' : 'local';
   $('savedDecks').innerHTML = saved.length ? saved.map(deck => `<article class="deck-row">
     <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="${source}-badge">${source === 'cloud' ? '云端' : '本机'}</span>${deck.isPublic ? '<span class="public-badge">已公开</span>' : ''}<span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
-    <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}" data-source="${source}">载入</button><button data-copy-deck="${escapeHtml(deck.id)}" data-source="${source}">复制</button><button data-share-deck="${escapeHtml(deck.id)}" data-source="${source}">${source === 'cloud' ? '发布' : '分享'}</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}" data-source="${source}">删除</button></div>
+    <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}" data-source="${source}">查看 / 编辑</button><button data-copy-deck="${escapeHtml(deck.id)}" data-source="${source}">复制</button><button data-share-deck="${escapeHtml(deck.id)}" data-source="${source}">${source === 'cloud' ? '发布' : '分享'}</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}" data-source="${source}">删除</button></div>
   </article>`).join('') : `<p class="empty-panel">${authUser ? '账号中还没有卡组。编辑一副卡组后点击“保存卡组”。' : '还没有保存的卡组。编辑一副卡组后点击“保存卡组”。'}</p>`;
 }
 
@@ -494,6 +494,10 @@ function loadDeck(deck, copy = false, destination = 'editor') {
   if (!normalized) return;
   quantities.clear();
   Object.entries(normalized.cards).forEach(([id, quantity]) => quantities.set(id, quantity));
+  $('search').value = '';
+  $('type').value = '';
+  $('rarity').value = '';
+  $('selected').checked = true;
   $('deckName').value = copy ? `${normalized.name}（副本）`.slice(0, 40) : normalized.name;
   $('deckDescription').value = normalized.description;
   activeDeckId = copy ? null : normalized.id;
@@ -501,7 +505,8 @@ function loadDeck(deck, copy = false, destination = 'editor') {
   persistDraft();
   renderAll();
   setView(destination);
-  setStatus(copy ? '已复制到编辑器，可以继续修改。' : `已载入“${normalized.name}”。`, 'success');
+  $('deckNote').textContent = '当前只显示这副卡组实际使用的卡；取消“只看已选”即可继续添加其他卡。';
+  setStatus(copy ? '已复制到编辑器，并只显示卡组中已有的卡。' : `已载入“${normalized.name}”，当前只显示卡组中已有的卡。`, 'success');
 }
 
 async function saveCurrentDeck() {
@@ -784,6 +789,7 @@ for (const button of document.querySelectorAll('[data-deck]')) {
 
 $('newDeck').addEventListener('click', () => {
   quantities.clear();
+  $('selected').checked = false;
   $('deckName').value = '未命名卡组';
   $('deckDescription').value = '';
   activeDeckId = null;
@@ -802,6 +808,7 @@ $('all').addEventListener('click', () => {
 
 $('clear').addEventListener('click', () => {
   quantities.clear();
+  $('selected').checked = false;
   markDirty();
   $('deckNote').textContent = '已清空当前选牌。';
   renderAll();
