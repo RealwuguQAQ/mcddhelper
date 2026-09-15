@@ -8,10 +8,19 @@ const quantities = new Map();
 const STORAGE_KEY = 'mcdd-saved-decks-v1';
 const DRAFT_KEY = 'mcdd-current-deck-v1';
 const PUBLICATIONS_KEY = 'mcdd-shared-decks-v1';
+const cloudConfig = window.MCDD_SUPABASE_CONFIG || {};
+const cloudEnabled = Boolean(cloudConfig.url && cloudConfig.publishableKey && window.supabase?.createClient);
+const cloud = cloudEnabled ? window.supabase.createClient(cloudConfig.url, cloudConfig.publishableKey, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+}) : null;
 
 let activeDeckId = null;
 let dirty = false;
 let incomingDeck = null;
+let authUser = null;
+let cloudDecks = [];
+let communityDecks = [];
+let cloudBusy = false;
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -23,7 +32,11 @@ function setStatus(message, tone = '') {
 }
 
 function makeId() {
-  return globalThis.crypto?.randomUUID?.() || `deck-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, char => {
+    const value = Math.random() * 16 | 0;
+    return (char === 'x' ? value : value & 3 | 8).toString(16);
+  });
 }
 
 function readStorage(key) {
@@ -60,6 +73,9 @@ function normalizeDeck(raw, fallbackId = null) {
     name: String(raw.name || '未命名卡组').slice(0, 40),
     description: String(raw.description || '').slice(0, 300),
     cards: cleanQuantities(raw.cards),
+    isPublic: Boolean(raw.isPublic ?? raw.is_public),
+    authorName: String(raw.authorName || raw.author_name || '玩家').slice(0, 40),
+    ownerId: raw.ownerId || raw.owner_id || null,
     createdAt: raw.createdAt || new Date().toISOString(),
     updatedAt: raw.updatedAt || new Date().toISOString()
   };
@@ -316,16 +332,109 @@ function deckCounts(deck) {
   return `${analysis.roleTotal} 张角色卡 · ${analysis.actionTotal} 张行动卡`;
 }
 
+function cloudRowToDeck(row) {
+  return normalizeDeck({
+    id: row.id,
+    ownerId: row.owner_id,
+    name: row.name,
+    description: row.description,
+    cards: row.cards,
+    isPublic: row.is_public,
+    authorName: row.author_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  });
+}
+
+function cloudDeckRow(deck, isPublic = deck.isPublic) {
+  return {
+    id: deck.id,
+    owner_id: authUser.id,
+    name: deck.name,
+    description: deck.description,
+    cards: deck.cards,
+    is_public: Boolean(isPublic),
+    author_name: String(authUser.user_metadata?.display_name || '玩家').slice(0, 40),
+    created_at: deck.createdAt,
+    updated_at: new Date().toISOString()
+  };
+}
+
+function updateAccountUi() {
+  $('accountSummary').hidden = !authUser;
+  $('accountEmail').textContent = authUser?.email || '';
+  $('accountButton').hidden = Boolean(authUser);
+  $('signOutButton').hidden = !authUser;
+  $('importLocalDecks').hidden = !authUser || !readStorage(STORAGE_KEY).length;
+  $('savedAccountTitle').textContent = authUser ? '云端卡组已启用' : cloudEnabled ? '尚未登录' : '云端尚未配置';
+  $('savedDecksNote').textContent = authUser
+    ? `已登录 ${authUser.email}，保存操作会同步到账号。当前草稿仍会保留在本机。`
+    : cloudEnabled
+      ? '当前使用本机保存。登录后可以跨设备同步自己的卡组。'
+      : '当前使用本机保存。完成 config.js 和数据库配置后即可启用账号同步。';
+  $('communityNote').textContent = authUser
+    ? '点击“分享当前卡组”会把卡组发布到公共广场，并生成可直接打开的链接。'
+    : cloudEnabled
+      ? '可以浏览公共卡组；登录后可以保存和发布自己的卡组。未登录时仍可生成自包含分享链接。'
+      : '云端尚未配置，目前继续使用自包含分享链接和本机分享记录。';
+}
+
+async function loadMyCloudDecks() {
+  if (!cloud || !authUser) {
+    cloudDecks = [];
+    renderSavedDecks();
+    return;
+  }
+  const { data, error } = await cloud.from('decks').select('*').eq('owner_id', authUser.id).order('updated_at', { ascending: false });
+  if (error) throw error;
+  cloudDecks = (data || []).map(cloudRowToDeck).filter(Boolean);
+  renderSavedDecks();
+}
+
+async function loadCommunityDecks() {
+  if (!cloud) {
+    communityDecks = [];
+    renderPublishedDecks();
+    return;
+  }
+  const { data, error } = await cloud.from('decks').select('*').eq('is_public', true).order('updated_at', { ascending: false }).limit(50);
+  if (error) throw error;
+  communityDecks = (data || []).map(cloudRowToDeck).filter(Boolean);
+  renderPublishedDecks();
+}
+
+async function refreshCloudDecks() {
+  if (!cloud || cloudBusy) return;
+  cloudBusy = true;
+  try {
+    await Promise.all([loadMyCloudDecks(), loadCommunityDecks()]);
+  } catch (error) {
+    setStatus(`云端数据读取失败：${error.message}`, 'error');
+  } finally {
+    cloudBusy = false;
+  }
+}
+
 function renderSavedDecks() {
-  const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  const saved = authUser ? cloudDecks : readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  const source = authUser ? 'cloud' : 'local';
   $('savedDecks').innerHTML = saved.length ? saved.map(deck => `<article class="deck-row">
-    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
-    <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}">载入</button><button data-copy-deck="${escapeHtml(deck.id)}">复制</button><button data-share-deck="${escapeHtml(deck.id)}">分享</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}">删除</button></div>
-  </article>`).join('') : '<p class="empty-panel">还没有保存的卡组。编辑一副卡组后点击“保存卡组”。</p>';
+    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="${source}-badge">${source === 'cloud' ? '云端' : '本机'}</span>${deck.isPublic ? '<span class="public-badge">已公开</span>' : ''}<span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
+    <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}" data-source="${source}">载入</button><button data-copy-deck="${escapeHtml(deck.id)}" data-source="${source}">复制</button><button data-share-deck="${escapeHtml(deck.id)}" data-source="${source}">${source === 'cloud' ? '发布' : '分享'}</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}" data-source="${source}">删除</button></div>
+  </article>`).join('') : `<p class="empty-panel">${authUser ? '账号中还没有卡组。编辑一副卡组后点击“保存卡组”。' : '还没有保存的卡组。编辑一副卡组后点击“保存卡组”。'}</p>`;
 }
 
 function renderPublishedDecks() {
+  if (cloud) {
+    $('publishedDecksHeading').textContent = '公开卡组广场';
+    $('publishedDecks').innerHTML = communityDecks.length ? communityDecks.map(deck => `<article class="deck-row">
+      <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="public-badge">${escapeHtml(deck.authorName)}</span><span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
+      <div class="row-actions"><button data-load-community="${escapeHtml(deck.id)}" class="primary">查看并复制</button><button data-link-community="${escapeHtml(deck.id)}">复制链接</button></div>
+    </article>`).join('') : '<p class="empty-panel">公共卡组广场还没有内容。</p>';
+    return;
+  }
   const published = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  $('publishedDecksHeading').textContent = '本机分享记录';
   $('publishedDecks').innerHTML = published.length ? published.map(deck => `<article class="deck-row">
     <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span>${escapeHtml(deckCounts(deck))} · 分享于 ${escapeHtml(formatDate(deck.publishedAt || deck.updatedAt))}</span></div>
     <div class="row-actions"><button data-load-published="${escapeHtml(deck.id)}">查看并复制</button><button data-link-published="${escapeHtml(deck.id)}">复制链接</button><button class="danger" data-delete-published="${escapeHtml(deck.id)}">删除记录</button></div>
@@ -350,6 +459,7 @@ function renderAll() {
   renderSavedDecks();
   renderPublishedDecks();
   renderIncomingDeck();
+  updateAccountUi();
   $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'}${dirty ? ' · 未保存' : ''}`;
 }
 
@@ -367,10 +477,14 @@ function setView(view) {
   $('printAside').hidden = !printing;
   document.body.dataset.view = view;
   if (printing) renderPrintSummary();
-  if (view === 'saved') renderSavedDecks();
+  if (view === 'saved') {
+    renderSavedDecks();
+    if (authUser) void refreshCloudDecks();
+  }
   if (view === 'community') {
     renderIncomingDeck();
     renderPublishedDecks();
+    if (cloud) void refreshCloudDecks();
   }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -390,20 +504,30 @@ function loadDeck(deck, copy = false, destination = 'editor') {
   setStatus(copy ? '已复制到编辑器，可以继续修改。' : `已载入“${normalized.name}”。`, 'success');
 }
 
-function saveCurrentDeck() {
+async function saveCurrentDeck() {
   try {
-    const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
-    const existing = saved.find(item => item.id === activeDeckId);
-    const snapshot = currentSnapshot({ id: activeDeckId || makeId(), createdAt: existing?.createdAt || new Date().toISOString() });
-    const index = saved.findIndex(item => item.id === snapshot.id);
-    if (index >= 0) saved[index] = snapshot;
-    else saved.unshift(snapshot);
-    writeStorage(STORAGE_KEY, saved);
+    let snapshot;
+    if (cloud && authUser) {
+      const existing = cloudDecks.find(item => item.id === activeDeckId);
+      snapshot = currentSnapshot({ id: existing?.id || makeId(), createdAt: existing?.createdAt || new Date().toISOString(), isPublic: existing?.isPublic });
+      const { data, error } = await cloud.from('decks').upsert(cloudDeckRow(snapshot), { onConflict: 'id' }).select().single();
+      if (error) throw error;
+      snapshot = cloudRowToDeck(data);
+      cloudDecks = [snapshot, ...cloudDecks.filter(item => item.id !== snapshot.id)];
+    } else {
+      const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+      const existing = saved.find(item => item.id === activeDeckId);
+      snapshot = currentSnapshot({ id: activeDeckId || makeId(), createdAt: existing?.createdAt || new Date().toISOString() });
+      const index = saved.findIndex(item => item.id === snapshot.id);
+      if (index >= 0) saved[index] = snapshot;
+      else saved.unshift(snapshot);
+      writeStorage(STORAGE_KEY, saved);
+    }
     activeDeckId = snapshot.id;
     dirty = false;
     persistDraft();
     renderAll();
-    setStatus(`已保存“${snapshot.name}”到这台设备。`, 'success');
+    setStatus(`已保存“${snapshot.name}”到${authUser ? '你的账号' : '这台设备'}。`, 'success');
   } catch (error) {
     setStatus(`保存失败：${error.message}`, 'error');
   }
@@ -434,6 +558,10 @@ function shareUrl(deck) {
   return `${location.href.split('#')[0]}#deck=${encodeDeck(deck)}`;
 }
 
+function cloudDeckUrl(id) {
+  return `${location.href.split('#')[0]}#cloud=${encodeURIComponent(id)}`;
+}
+
 async function copyText(value) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -450,29 +578,154 @@ async function copyText(value) {
 }
 
 async function publishDeck(deck = currentSnapshot()) {
-  const snapshot = normalizeDeck(deck);
-  const url = shareUrl(snapshot);
+  let snapshot = normalizeDeck(deck);
+  let url;
+  if (cloud && authUser) {
+    try {
+      const owned = cloudDecks.find(item => item.id === snapshot.id);
+      snapshot = normalizeDeck({ ...snapshot, id: owned?.id || makeId(), createdAt: owned?.createdAt || snapshot.createdAt, isPublic: true });
+      const { data, error } = await cloud.from('decks').upsert(cloudDeckRow(snapshot, true), { onConflict: 'id' }).select().single();
+      if (error) throw error;
+      snapshot = cloudRowToDeck(data);
+      cloudDecks = [snapshot, ...cloudDecks.filter(item => item.id !== snapshot.id)];
+      activeDeckId = snapshot.id;
+      dirty = false;
+      url = cloudDeckUrl(snapshot.id);
+      await loadCommunityDecks();
+    } catch (error) {
+      setStatus(`发布失败：${error.message}`, 'error');
+      return;
+    }
+  } else {
+    url = shareUrl(snapshot);
+    const records = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+    records.unshift({ ...snapshot, id: makeId(), shareUrl: url, publishedAt: new Date().toISOString() });
+    writeStorage(PUBLICATIONS_KEY, records.slice(0, 30));
+  }
   $('shareLinkOutput').value = url;
   $('shareResult').hidden = false;
-  const records = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
-  records.unshift({ ...snapshot, id: makeId(), shareUrl: url, publishedAt: new Date().toISOString() });
-  writeStorage(PUBLICATIONS_KEY, records.slice(0, 30));
   renderPublishedDecks();
   try {
     await copyText(url);
-    setStatus('分享链接已复制。对方打开后可以查看、复制或打印这副卡组。', 'success');
+    setStatus(`${cloud && authUser ? '卡组已发布到公共广场，' : ''}分享链接已复制。`, 'success');
   } catch {
     setStatus('无法自动复制，请手动复制页面中显示的分享链接。', 'error');
   }
 }
 
-function initializeIncomingDeck() {
+async function initializeIncomingDeck() {
+  const cloudMatch = location.hash.match(/^#cloud=([0-9a-f-]{36})$/i);
+  if (cloudMatch) {
+    if (!cloud) {
+      setStatus('这是云端卡组链接，但当前网站尚未配置云端服务。', 'error');
+      return;
+    }
+    const { data, error } = await cloud.from('decks').select('*').eq('id', cloudMatch[1]).eq('is_public', true).single();
+    if (error || !data) {
+      setStatus('找不到这副公开卡组，它可能已被取消公开。', 'error');
+      return;
+    }
+    incomingDeck = cloudRowToDeck(data);
+    renderIncomingDeck();
+    setView('community');
+    return;
+  }
   const match = location.hash.match(/^#deck=([A-Za-z0-9_-]+)$/);
   if (!match) return;
   incomingDeck = decodeDeck(match[1]);
   if (incomingDeck) setView('community');
   else setStatus('分享链接中的卡组数据无效或已经损坏。', 'error');
 }
+
+function authCredentials() {
+  return {
+    displayName: $('authDisplayName').value.trim(),
+    email: $('authEmail').value.trim(),
+    password: $('authPassword').value
+  };
+}
+
+function setAuthMessage(message, tone = '') {
+  $('authMessage').textContent = message;
+  $('authMessage').className = `note ${tone}`;
+}
+
+async function initializeCloud() {
+  updateAccountUi();
+  if (!cloud) return;
+  const { data, error } = await cloud.auth.getSession();
+  if (error) setStatus(`登录状态读取失败：${error.message}`, 'error');
+  authUser = data?.session?.user || null;
+  updateAccountUi();
+  await refreshCloudDecks();
+  cloud.auth.onAuthStateChange((_event, session) => {
+    authUser = session?.user || null;
+    updateAccountUi();
+    setTimeout(() => { void refreshCloudDecks(); }, 0);
+  });
+}
+
+$('accountButton').addEventListener('click', () => {
+  if (!cloud) {
+    setStatus('账号界面已经就绪。请先按 SUPABASE_SETUP.md 填写 config.js 并建立数据库。', 'error');
+    setView('saved');
+    return;
+  }
+  setAuthMessage('');
+  $('authDialog').showModal();
+});
+
+$('authForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const { email, password } = authCredentials();
+  setAuthMessage('正在登录…');
+  const { error } = await cloud.auth.signInWithPassword({ email, password });
+  if (error) {
+    setAuthMessage(`登录失败：${error.message}`, 'error');
+    return;
+  }
+  $('authDialog').close();
+  setStatus('登录成功，正在同步你的卡组。', 'success');
+});
+
+$('signUpButton').addEventListener('click', async () => {
+  const { displayName, email, password } = authCredentials();
+  if (!displayName || !email || password.length < 6) {
+    setAuthMessage('请输入公开昵称、有效邮箱和至少 6 位密码。', 'error');
+    return;
+  }
+  setAuthMessage('正在创建账号…');
+  const { data, error } = await cloud.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: location.href.split('#')[0],
+      data: { display_name: displayName.slice(0, 40) }
+    }
+  });
+  if (error) {
+    setAuthMessage(`注册失败：${error.message}`, 'error');
+    return;
+  }
+  if (data.session) {
+    $('authDialog').close();
+    setStatus('账号创建成功，已经登录。', 'success');
+  } else {
+    setAuthMessage('注册成功。请打开验证邮件并点击其中的链接，然后返回登录。', 'success');
+  }
+});
+
+$('signOutButton').addEventListener('click', async () => {
+  const { error } = await cloud.auth.signOut();
+  if (error) setStatus(`退出失败：${error.message}`, 'error');
+  else {
+    authUser = null;
+    cloudDecks = [];
+    updateAccountUi();
+    renderSavedDecks();
+    setStatus('已退出账号，本机草稿仍然保留。', 'success');
+  }
+});
 
 $('gallery').addEventListener('click', event => {
   const button = event.target.closest('button');
@@ -575,10 +828,11 @@ $('goPrint').addEventListener('click', () => setView('print'));
 $('shareCurrent').addEventListener('click', () => publishDeck());
 $('closeImage').addEventListener('click', () => $('lightbox').close());
 
-$('savedDecks').addEventListener('click', event => {
+$('savedDecks').addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button) return;
-  const saved = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  const source = button.dataset.source || 'local';
+  const saved = source === 'cloud' ? cloudDecks : readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
   const id = button.dataset.loadDeck || button.dataset.copyDeck || button.dataset.shareDeck || button.dataset.deleteDeck;
   const deck = saved.find(item => item.id === id);
   if (!deck) return;
@@ -586,16 +840,37 @@ $('savedDecks').addEventListener('click', event => {
   if (button.dataset.copyDeck) loadDeck(deck, true);
   if (button.dataset.shareDeck) publishDeck(deck);
   if (button.dataset.deleteDeck) {
-    writeStorage(STORAGE_KEY, saved.filter(item => item.id !== id));
+    if (source === 'cloud') {
+      const { error } = await cloud.from('decks').delete().eq('id', id);
+      if (error) {
+        setStatus(`删除失败：${error.message}`, 'error');
+        return;
+      }
+      cloudDecks = cloudDecks.filter(item => item.id !== id);
+      communityDecks = communityDecks.filter(item => item.id !== id);
+    } else {
+      writeStorage(STORAGE_KEY, saved.filter(item => item.id !== id));
+    }
     if (activeDeckId === id) activeDeckId = null;
     renderAll();
-    setStatus(`已删除“${deck.name}”的本地保存记录。`, 'success');
+    setStatus(`已删除“${deck.name}”的${source === 'cloud' ? '云端' : '本机'}记录。`, 'success');
   }
 });
 
 $('publishedDecks').addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button) return;
+  const cloudId = button.dataset.loadCommunity || button.dataset.linkCommunity;
+  if (cloudId) {
+    const deck = communityDecks.find(item => item.id === cloudId);
+    if (!deck) return;
+    if (button.dataset.loadCommunity) loadDeck(deck, true);
+    if (button.dataset.linkCommunity) {
+      try { await copyText(cloudDeckUrl(deck.id)); setStatus('公开卡组链接已复制。', 'success'); }
+      catch { setStatus('无法访问剪贴板。', 'error'); }
+    }
+    return;
+  }
   const records = readStorage(PUBLICATIONS_KEY);
   const id = button.dataset.loadPublished || button.dataset.linkPublished || button.dataset.deletePublished;
   const record = records.find(item => item.id === id);
@@ -609,6 +884,21 @@ $('publishedDecks').addEventListener('click', async event => {
     writeStorage(PUBLICATIONS_KEY, records.filter(item => item.id !== id));
     renderPublishedDecks();
     setStatus('已删除本机分享记录，已经发出的链接仍然有效。', 'success');
+  }
+});
+
+$('importLocalDecks').addEventListener('click', async () => {
+  if (!cloud || !authUser) return;
+  const localDecks = readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
+  if (!localDecks.length) return;
+  try {
+    const rows = localDecks.map(deck => cloudDeckRow({ ...deck, id: makeId() }, false));
+    const { error } = await cloud.from('decks').insert(rows);
+    if (error) throw error;
+    await loadMyCloudDecks();
+    setStatus(`已上传 ${localDecks.length} 副本机卡组。原本机记录仍然保留。`, 'success');
+  } catch (error) {
+    setStatus(`上传本机卡组失败：${error.message}`, 'error');
   }
 });
 
@@ -796,4 +1086,6 @@ for (const rarity of rarities) {
 
 restoreDraft();
 renderAll();
-initializeIncomingDeck();
+void initializeCloud();
+void initializeIncomingDeck();
+window.addEventListener('hashchange', () => { void initializeIncomingDeck(); });

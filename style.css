@@ -67,6 +67,10 @@ header {
 .current-deck { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
 .current-deck span { color: #7f8da0; font-size: 11px; letter-spacing: 1px; }
 .current-deck strong { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.account-summary { display: flex; flex-direction: column; align-items: flex-end; max-width: 220px; }
+.account-summary span { color: var(--success); font-size: 10px; letter-spacing: 1px; }
+.account-summary strong { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 
 .workspace { display: grid; grid-template-columns: 124px minmax(0, 1fr) 326px; min-height: calc(100vh - 84px); }
 .side-nav {
@@ -103,6 +107,9 @@ h2 { font-size: 21px; margin: 0 0 22px; }
 .badge { font-size: 13px; color: #bcc8d7; border: 1px solid var(--line); padding: 7px 12px; border-radius: 20px; text-align: center; }
 .note { font-size: 13px; line-height: 1.7; color: var(--muted); }
 .local-note { border: 1px solid #4d5b6c; background: #131d29; border-radius: 8px; padding: 12px 14px; margin: 0 0 24px; }
+.account-panel { display: flex; justify-content: space-between; align-items: center; gap: 18px; border: 1px solid #4d5b6c; background: #131d29; border-radius: 8px; padding: 14px; margin: 0 0 24px; }
+.account-panel strong { color: var(--gold); }
+.account-panel p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
 .deck-fields { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(280px, 1.6fr); gap: 14px; margin-bottom: 18px; }
 .deck-fields label { display: flex; flex-direction: column; gap: 7px; color: #9eacbc; font-size: 12px; }
@@ -211,6 +218,17 @@ dialog { max-width: 95vw; border: 1px solid #617083; border-radius: 12px; backgr
 dialog::backdrop { background: #000c; }
 dialog img { display: block; max-height: 78vh; max-width: 85vw; margin: 15px auto; }
 dialog p { font-size: 14px; max-width: 600px; }
+.auth-dialog { width: min(440px, 92vw); padding: 28px; }
+.dialog-close { display: flex; justify-content: flex-end; margin: -14px -14px 8px; }
+.dialog-close button { padding: 7px 9px; background: transparent; border-color: transparent; }
+.auth-dialog h2 { margin-bottom: 10px; }
+.auth-dialog form:not(.dialog-close) { display: grid; gap: 14px; margin-top: 20px; }
+.auth-dialog label { display: grid; gap: 7px; color: #aebaca; font-size: 13px; }
+.auth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.cloud-badge, .local-badge, .public-badge { display: inline-flex; margin-right: 6px; padding: 3px 7px; border-radius: 10px; font-size: 10px !important; }
+.cloud-badge { color: var(--success) !important; background: #77d4a318; }
+.local-badge { color: #aebaca !important; background: #aebaca18; }
+.public-badge { color: var(--gold) !important; background: var(--gold-soft); }
 .preview-open .app { display: none; }
 
 @media (max-width: 1120px) {
@@ -233,6 +251,7 @@ dialog p { font-size: 14px; max-width: 600px; }
   .deck-fields { grid-template-columns: 1fr; }
   .paper-mini { display: none; }
   .deck-row { align-items: flex-start; flex-direction: column; }
+  .account-summary { display: none !important; }
   .row-actions { width: 100%; }
   #previewPanel { overflow: auto; }
   .preview-bar { padding: 0 16px; min-width: 420px; }
@@ -242,12 +261,16 @@ dialog p { font-size: 14px; max-width: 600px; }
   .brand { font-size: 21px; }
   .brand span { font-size: 16px; }
   header .primary { font-size: 12px; padding: 9px 10px; }
+  #accountButton, #signOutButton { font-size: 11px; padding: 8px; }
+  .header-actions { gap: 5px; }
   h1 { font-size: 27px; }
   .heading { align-items: flex-start; }
   .heading .badge { display: none; }
   .toolbar > * { width: 100%; max-width: none !important; }
   .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
   .print-card-list { grid-template-columns: 1fr; }
+  .account-panel { align-items: flex-start; flex-direction: column; }
+  .account-panel button { width: 100%; }
 }
 
 @page { size: A4 portrait; margin: 0; }

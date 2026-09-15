@@ -13,7 +13,12 @@
     <header>
       <div class="brand">◈ <span>鸣潮对决<small>卡组工作台</small></span></div>
       <div class="current-deck"><span>当前卡组</span><strong id="headerDeckName">未命名卡组</strong></div>
-      <button class="primary" id="print">下载彩色 PDF</button>
+      <div class="header-actions">
+        <div id="accountSummary" class="account-summary" hidden><span>已登录</span><strong id="accountEmail"></strong></div>
+        <button id="accountButton">登录 / 注册</button>
+        <button id="signOutButton" hidden>退出</button>
+        <button class="primary" id="print">下载彩色 PDF</button>
+      </div>
     </header>
 
     <div class="workspace">
@@ -76,7 +81,10 @@
             <div><p class="eyebrow">MY DECKS</p><h1>我的卡组。</h1></div>
             <button id="saveCurrentTop" class="primary">保存当前卡组</button>
           </div>
-          <p class="note local-note">卡组暂时保存在这台设备的浏览器中。清理浏览器数据会删除这些记录。</p>
+          <div class="account-panel" id="savedAccountPanel">
+            <div><strong id="savedAccountTitle">尚未登录</strong><p id="savedDecksNote">当前使用本机保存。登录后可以跨设备同步自己的卡组。</p></div>
+            <button id="importLocalDecks" hidden>上传本机卡组</button>
+          </div>
           <div id="savedDecks" class="deck-list"></div>
         </section>
 
@@ -85,10 +93,10 @@
             <div><p class="eyebrow">SHARED DECKS</p><h1>公开卡组。</h1></div>
             <button id="shareCurrent" class="primary">分享当前卡组</button>
           </div>
-          <p class="note local-note">当前版本通过链接分享卡组。收到链接的人可以查看、复制和打印；账号发布广场将在接入云端数据库后启用。</p>
+          <p class="note local-note" id="communityNote">未登录时仍可生成自包含分享链接；登录后可以把卡组发布到公共卡组广场。</p>
           <label id="shareResult" class="share-result" hidden>刚刚生成的分享链接<input id="shareLinkOutput" type="text" readonly aria-label="卡组分享链接"></label>
           <div id="incomingDeck"></div>
-          <h2 class="subheading">本机分享记录</h2>
+          <h2 class="subheading" id="publishedDecksHeading">公开卡组广场</h2>
           <div id="publishedDecks" class="deck-list"></div>
         </section>
       </main>
@@ -137,7 +145,22 @@
   </section>
 
   <dialog id="lightbox"><button id="closeImage">关闭 ×</button><img id="largeImage" alt=""><p id="imageCaption"></p></dialog>
+  <dialog id="authDialog" class="auth-dialog">
+    <form method="dialog" class="dialog-close"><button aria-label="关闭账号窗口">关闭 ×</button></form>
+    <p class="eyebrow">ACCOUNT</p>
+    <h2>登录或创建账号</h2>
+    <p class="note">使用邮箱和密码登录。注册后可能需要先点击验证邮件中的链接。</p>
+    <form id="authForm">
+      <label>公开昵称<input id="authDisplayName" type="text" autocomplete="nickname" maxlength="40" placeholder="注册时填写，发布卡组时显示"></label>
+      <label>邮箱<input id="authEmail" type="email" autocomplete="email" required placeholder="name@example.com"></label>
+      <label>密码<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required placeholder="至少 6 位"></label>
+      <div class="auth-actions"><button class="primary" type="submit">登录</button><button id="signUpButton" type="button">注册</button></div>
+    </form>
+    <p id="authMessage" class="note" role="status" aria-live="polite"></p>
+  </dialog>
   <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>
