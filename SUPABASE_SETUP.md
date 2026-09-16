@@ -1,7 +1,8 @@
 # Supabase 账号与云卡组配置
 
 1. 登录 [Supabase](https://supabase.com/dashboard)，创建一个 Free 项目。
-2. 打开 **SQL Editor**，粘贴并运行 `supabase-schema.sql` 的全部内容。
+2. 打开 **SQL Editor**，粘贴并运行 `supabase-schema.sql` 的全部内容。它也会创建访问量与注册量统计函数；已有项目可以安全地重新运行完整脚本。
+   - 已经创建过数据库时也需要重新运行一次；脚本会补充卡组环境字段和公开卡组查询索引，不会删除已有卡组。
 3. 打开项目的 **Connect** 面板，复制 Project URL 和 Publishable key。
 4. 把两个值填入 `config.js`。不要填写 Secret key 或旧版 `service_role` key。
 5. 在 **Authentication → URL Configuration** 中设置：

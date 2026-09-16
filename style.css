@@ -67,6 +67,10 @@ header {
 .current-deck { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
 .current-deck span { color: #7f8da0; font-size: 11px; letter-spacing: 1px; }
 .current-deck strong { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.site-stats { display: flex; gap: 8px; }
+.site-stats > div { min-width: 82px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: #141e2a; text-align: center; }
+.site-stats strong { display: block; color: var(--gold); font-size: 16px; line-height: 1.1; }
+.site-stats span { color: #8f9daf; font-size: 10px; }
 .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .account-summary { display: flex; flex-direction: column; align-items: flex-end; max-width: 220px; }
 .account-summary span { color: var(--success); font-size: 10px; letter-spacing: 1px; }
@@ -111,7 +115,7 @@ h2 { font-size: 21px; margin: 0 0 22px; }
 .account-panel strong { color: var(--gold); }
 .account-panel p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
-.deck-fields { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(280px, 1.6fr); gap: 14px; margin-bottom: 18px; }
+.deck-fields { display: grid; grid-template-columns: minmax(180px, .65fr) minmax(150px, .45fr) minmax(280px, 1.5fr); gap: 14px; margin-bottom: 18px; }
 .deck-fields label { display: flex; flex-direction: column; gap: 7px; color: #9eacbc; font-size: 12px; }
 .deck-fields input, .deck-fields textarea { width: 100%; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -126,7 +130,11 @@ h2 { font-size: 21px; margin: 0 0 22px; }
 .batch input { width: 62px; padding: 6px; }
 .batch span { color: var(--muted); }
 
-.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 24px 16px; margin-top: 24px; }
+.gallery { margin-top: 24px; }
+.card-section + .card-section { margin-top: 38px; padding-top: 30px; border-top: 1px solid var(--line); }
+.card-section > h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.card-section > h2 small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(154px, 1fr)); gap: 24px 16px; }
 .card { min-width: 0; padding: 7px; margin: -7px; border: 1px solid transparent; border-radius: 10px; }
 .card.chosen { background: var(--gold-soft); border-color: #d3b36c48; }
 .image-button { padding: 0; background: #0a1017; border: 1px solid #3a4655; display: block; width: 100%; overflow: hidden; border-radius: 8px; aspect-ratio: 63 / 88; }
@@ -186,10 +194,17 @@ h2 { font-size: 21px; margin: 0 0 22px; }
 
 .deck-list { display: grid; gap: 12px; }
 .deck-row, .shared-deck, .shared-placeholder, .empty-panel { background: #131d29; border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
-.deck-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
+.deck-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; }
 .deck-row h2, .shared-deck h2 { margin: 0 0 7px; font-size: 18px; }
 .deck-row p, .shared-deck > p { margin: 0 0 8px; color: #aebaca; font-size: 13px; line-height: 1.55; }
 .deck-row span { color: #78879a; font-size: 11px; }
+.deck-covers { width: 116px; min-height: 82px; display: flex; align-items: center; justify-content: center; }
+.deck-cover { width: 58px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 5px; border: 1px solid #536174; box-shadow: 0 7px 18px #0008; background: #0d141d; }
+.deck-cover + .deck-cover { margin-left: -30px; }
+.deck-cover:nth-child(2) { transform: translateY(-3px); }
+.deck-cover:nth-child(3) { transform: translateY(3px); }
+.deck-cover-placeholder { width: 58px; aspect-ratio: 63 / 88; border: 1px dashed #536174; border-radius: 5px; display: grid; place-items: center; color: #728095; font-size: 11px; text-align: center; }
+.shared-deck-layout { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: center; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 7px; flex-shrink: 0; }
 .row-actions button { padding: 8px 10px; font-size: 12px; }
 .shared-placeholder { display: flex; flex-direction: column; gap: 7px; color: #aebaca; }
@@ -199,6 +214,11 @@ h2 { font-size: 21px; margin: 0 0 22px; }
 .share-result { display: flex; flex-direction: column; gap: 8px; color: var(--gold); font-size: 12px; margin: 0 0 18px; }
 .share-result input { width: 100%; color: #cad4df; }
 .empty-panel { color: var(--muted); line-height: 1.7; }
+.community-toolbar { display: flex; align-items: end; gap: 10px; margin: 0 0 18px; }
+.community-toolbar label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; }
+.loading-panel { display: grid; gap: 12px; }
+.loading-bar { height: 72px; border-radius: 9px; background: linear-gradient(90deg,#131d29 25%,#202c3a 50%,#131d29 75%); background-size: 200% 100%; animation: loading 1.2s infinite; }
+@keyframes loading { to { background-position: -200% 0; } }
 
 #status { color: var(--gold); font-size: 13px; line-height: 1.65; margin: 18px 0; overflow-wrap: anywhere; }
 #status.error { color: var(--danger); }
@@ -219,6 +239,11 @@ dialog::backdrop { background: #000c; }
 dialog img { display: block; max-height: 78vh; max-width: 85vw; margin: 15px auto; }
 dialog p { font-size: 14px; max-width: 600px; }
 .auth-dialog { width: min(440px, 92vw); padding: 28px; }
+.confirm-dialog { width: min(480px, 92vw); padding: 28px; }
+.confirm-content { color: var(--muted); font-size: 13px; line-height: 1.7; margin-bottom: 20px; }
+.confirm-content strong { color: #fff; }
+.confirm-content ul { margin: 10px 0 0; padding-left: 20px; }
+.confirm-dialog > input { width: 100%; margin: 0 0 16px; }
 .dialog-close { display: flex; justify-content: flex-end; margin: -14px -14px 8px; }
 .dialog-close button { padding: 7px 9px; background: transparent; border-color: transparent; }
 .auth-dialog h2 { margin-bottom: 10px; }
@@ -235,11 +260,11 @@ dialog p { font-size: 14px; max-width: 600px; }
   .workspace { grid-template-columns: 92px minmax(0, 1fr) 300px; }
   main { padding: 28px 22px 60px; }
   .side-nav button { font-size: 11px; }
-  .gallery { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); }
+  .card-grid { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); }
 }
 
 @media (max-width: 900px) {
-  header { position: static; padding: 14px 16px; }
+  header { position: static; padding: 14px 16px; flex-wrap: wrap; }
   .current-deck { display: none; }
   .workspace { display: flex; flex-direction: column; }
   .side-nav { position: sticky; top: 0; z-index: 15; flex-direction: row; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
@@ -249,8 +274,13 @@ dialog p { font-size: 14px; max-width: 600px; }
   aside { border-left: 0; border-top: 1px solid var(--line); padding: 24px 18px; }
   body[data-view="saved"] aside, body[data-view="community"] aside { display: none; }
   .deck-fields { grid-template-columns: 1fr; }
+  .community-toolbar { align-items: stretch; flex-direction: column; }
   .paper-mini { display: none; }
-  .deck-row { align-items: flex-start; flex-direction: column; }
+  .site-stats { order: 4; width: 100%; justify-content: center; }
+  .site-stats > div { flex: 1; }
+  .deck-row { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .deck-row .row-actions { grid-column: 1 / -1; }
+  .shared-deck-layout { grid-template-columns: 1fr; }
   .account-summary { display: none !important; }
   .row-actions { width: 100%; }
   #previewPanel { overflow: auto; }
@@ -267,7 +297,7 @@ dialog p { font-size: 14px; max-width: 600px; }
   .heading { align-items: flex-start; }
   .heading .badge { display: none; }
   .toolbar > * { width: 100%; max-width: none !important; }
-  .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
+  .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
   .print-card-list { grid-template-columns: 1fr; }
   .account-panel { align-items: flex-start; flex-direction: column; }
   .account-panel button { width: 100%; }

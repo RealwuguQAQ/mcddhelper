@@ -13,6 +13,10 @@
     <header>
       <div class="brand">◈ <span>鸣潮对决<small>卡组工作台</small></span></div>
       <div class="current-deck"><span>当前卡组</span><strong id="headerDeckName">未命名卡组</strong></div>
+      <div class="site-stats" aria-label="网站实时统计">
+        <div><strong id="visitCount">--</strong><span>实时访问量</span></div>
+        <div><strong id="registrationCount">--</strong><span>总注册量</span></div>
+      </div>
       <div class="header-actions">
         <div id="accountSummary" class="account-summary" hidden><span>已登录</span><strong id="accountEmail"></strong></div>
         <button id="accountButton">登录 / 注册</button>
@@ -38,12 +42,14 @@
 
           <div class="deck-fields">
             <label>卡组名称<input id="deckName" maxlength="40" value="未命名卡组"></label>
+            <label>对战环境<select id="deckEnvironment"><option value="bp01">第一弹环境</option><option value="bp02">第二弹环境</option></select></label>
             <label>卡组说明<textarea id="deckDescription" maxlength="300" rows="2" placeholder="记录打法、角色分工或改动计划"></textarea></label>
           </div>
 
           <div class="toolbar">
             <input id="search" type="search" placeholder="搜索卡名、卡号或效果" aria-label="搜索卡牌">
             <select id="type" aria-label="卡牌类型"><option value="">全部类型</option><option value="role">角色卡</option><option value="action">行动卡</option></select>
+            <select id="cardSet" aria-label="卡牌版本"><option value="">全部版本</option><option value="starter">起始卡组</option><option value="bp01">第一弹</option><option value="bp02">第二弹</option></select>
             <select id="rarity" aria-label="稀有度星级"><option value="">全部星级</option></select>
             <select id="sort" aria-label="卡牌和 PDF 排序"><option value="starsAsc">星级从低到高</option><option value="starsDesc">星级从高到低</option><option value="code">按卡号</option></select>
             <label class="check"><input id="selected" type="checkbox">只看已选</label>
@@ -94,10 +100,12 @@
             <button id="shareCurrent" class="primary">分享当前卡组</button>
           </div>
           <p class="note local-note" id="communityNote">未登录时仍可生成自包含分享链接；登录后可以把卡组发布到公共卡组广场。</p>
+          <div class="community-toolbar"><label>环境筛选<select id="communityEnvironment"><option value="">全部环境</option><option value="bp01">第一弹环境</option><option value="bp02">第二弹环境</option></select></label><button id="refreshCommunity">刷新</button></div>
           <label id="shareResult" class="share-result" hidden>刚刚生成的分享链接<input id="shareLinkOutput" type="text" readonly aria-label="卡组分享链接"></label>
           <div id="incomingDeck"></div>
           <h2 class="subheading" id="publishedDecksHeading">公开卡组广场</h2>
           <div id="publishedDecks" class="deck-list"></div>
+          <button id="loadMoreCommunity" class="wide" hidden>加载更多</button>
         </section>
       </main>
 
@@ -157,6 +165,19 @@
       <div class="auth-actions"><button class="primary" type="submit">登录</button><button id="signUpButton" type="button">注册</button></div>
     </form>
     <p id="authMessage" class="note" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <form method="dialog" class="dialog-close"><button value="cancel" aria-label="关闭确认窗口">关闭 ×</button></form>
+    <p class="eyebrow" id="confirmEyebrow">CONFIRM</p>
+    <h2 id="confirmTitle">确认操作</h2>
+    <div id="confirmContent" class="confirm-content"></div>
+    <div class="auth-actions"><button id="confirmCancel" value="cancel">取消</button><button id="confirmAccept" class="primary" value="confirm">确认</button></div>
+  </dialog>
+  <dialog id="shareCompleteDialog" class="confirm-dialog">
+    <p class="eyebrow">SHARED</p><h2>卡组分享完成</h2>
+    <p class="note">链接已经生成。完成后可以继续编辑或分享另一副卡组。</p>
+    <input id="shareCompleteLink" type="text" readonly aria-label="已生成的分享链接">
+    <div class="auth-actions"><button id="copyCompletedShare">复制链接</button><button id="finishShare" class="primary">完成</button></div>
   </dialog>
   <script src="vendor/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

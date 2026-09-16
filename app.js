@@ -8,6 +8,7 @@ const quantities = new Map();
 const STORAGE_KEY = 'mcdd-saved-decks-v1';
 const DRAFT_KEY = 'mcdd-current-deck-v1';
 const PUBLICATIONS_KEY = 'mcdd-shared-decks-v1';
+const VISIT_SESSION_KEY = 'mcdd-visit-counted-v1';
 const cloudConfig = window.MCDD_SUPABASE_CONFIG || {};
 const cloudEnabled = Boolean(cloudConfig.url && cloudConfig.publishableKey && window.supabase?.createClient);
 const cloud = cloudEnabled ? window.supabase.createClient(cloudConfig.url, cloudConfig.publishableKey, {
@@ -21,6 +22,45 @@ let authUser = null;
 let cloudDecks = [];
 let communityDecks = [];
 let cloudBusy = false;
+let saveBusy = false;
+let shareBusy = false;
+let communityState = 'idle';
+let communityError = '';
+let communityPage = 0;
+let communityHasMore = false;
+let communityRequestId = 0;
+let communityLoading = false;
+let draftTimer = null;
+const COMMUNITY_PAGE_SIZE = 20;
+const communityCache = new Map();
+
+const ENVIRONMENTS = {
+  bp01: { label: '第一弹环境', sets: new Set(['SD01', 'SD02', 'BP01']) },
+  bp02: { label: '第二弹环境', sets: new Set(['SD01', 'SD02', 'BP01', 'BP02']) }
+};
+
+function environmentLabel(value) {
+  return ENVIRONMENTS[value]?.label || ENVIRONMENTS.bp01.label;
+}
+
+function cardSet(card) {
+  const set = String(card.code?.split('-')[0] || card.obtain || '').toUpperCase();
+  if (/^SD\d+/.test(set)) return 'starter';
+  return set.toLowerCase();
+}
+
+function cardSetLabel(card) {
+  const set = cardSet(card);
+  if (set === 'starter') return '起始卡组';
+  if (set === 'bp01') return '第一弹';
+  if (set === 'bp02') return '第二弹';
+  return String(card.obtain || set || '未分类');
+}
+
+function cardAllowedInEnvironment(card, environment = $('deckEnvironment')?.value || 'bp01') {
+  const set = String(card.code?.split('-')[0] || card.obtain || '').toUpperCase();
+  return ENVIRONMENTS[environment]?.sets.has(set) ?? true;
+}
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -72,6 +112,7 @@ function normalizeDeck(raw, fallbackId = null) {
     id: typeof raw.id === 'string' && raw.id ? raw.id : fallbackId || makeId(),
     name: String(raw.name || '未命名卡组').slice(0, 40),
     description: String(raw.description || '').slice(0, 300),
+    environment: ENVIRONMENTS[raw.environment] ? raw.environment : 'bp01',
     cards: cleanQuantities(raw.cards),
     isPublic: Boolean(raw.isPublic ?? raw.is_public),
     authorName: String(raw.authorName || raw.author_name || '玩家').slice(0, 40),
@@ -86,6 +127,7 @@ function currentSnapshot(overrides = {}) {
     id: activeDeckId || makeId(),
     name: $('deckName').value.trim() || '未命名卡组',
     description: $('deckDescription').value.trim(),
+    environment: $('deckEnvironment').value,
     cards: Object.fromEntries([...quantities].filter(([, quantity]) => quantity > 0)),
     createdAt: overrides.createdAt,
     updatedAt: new Date().toISOString(),
@@ -93,12 +135,17 @@ function currentSnapshot(overrides = {}) {
   });
 }
 
-function persistDraft() {
+function persistDraftNow() {
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify(currentSnapshot({ id: activeDeckId || 'draft' })));
   } catch {
     setStatus('浏览器无法保存当前草稿，请检查隐私或存储设置。', 'error');
   }
+}
+
+function persistDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(persistDraftNow, 400);
 }
 
 function restoreDraft() {
@@ -107,6 +154,7 @@ function restoreDraft() {
     if (!draft) return;
     $('deckName').value = draft.name;
     $('deckDescription').value = draft.description;
+    $('deckEnvironment').value = draft.environment;
     quantities.clear();
     Object.entries(draft.cards).forEach(([id, quantity]) => quantities.set(id, quantity));
     activeDeckId = draft.id === 'draft' ? null : draft.id;
@@ -137,8 +185,11 @@ function filtered() {
   const query = $('search').value.trim().toLowerCase();
   const type = $('type').value;
   const rarity = $('rarity').value;
+  const set = $('cardSet').value;
   return ordered().filter(card =>
+    cardAllowedInEnvironment(card) &&
     (!type || card.type === type) &&
+    (!set || cardSet(card) === set) &&
     (!rarity || card.rarity === rarity) &&
     (!$('selected').checked || quantities.get(String(card.id))) &&
     [card.code, card.name, card.text].join(' ').toLowerCase().includes(query)
@@ -173,7 +224,7 @@ function hasExclusiveField(card) {
     Object.prototype.hasOwnProperty.call(card, 'exclusiveCharacters');
 }
 
-function analyzeDeck(source = quantities) {
+function analyzeDeck(source = quantities, environment = $('deckEnvironment').value) {
   const codeTotals = aggregateCodes(source);
   const roleCards = [];
   const actionCards = [];
@@ -189,6 +240,9 @@ function analyzeDeck(source = quantities) {
   const characterNames = [...new Set(roleCards.map(item => item.card.name))];
   const errors = [];
   const warnings = [];
+
+  const disallowed = [...source].filter(([id, quantity]) => quantity && !cardAllowedInEnvironment(cardsById.get(String(id)), environment));
+  if (disallowed.length) errors.push(`有 ${disallowed.length} 个卡图版本不属于${environmentLabel(environment)}。`);
 
   if (roleTotal < 3 || roleTotal > 15) errors.push(`角色卡组需要 3–15 张，目前 ${roleTotal} 张。`);
   if (characterNames.length !== 3) errors.push(`角色卡组需要恰好 3 种角色，目前 ${characterNames.length} 种。`);
@@ -253,18 +307,50 @@ function renderGallery() {
   $('libraryCount').textContent = `${cards.length} 个版本 · ${new Set(cards.map(card => card.code)).size} 个卡号`;
   $('filteredCount').textContent = `匹配 ${visible.length} 个版本`;
   $('sourceCount').textContent = `${cards.length} 个版本 / ${new Set(cards.map(card => card.code)).size} 个不同卡号`;
-  $('gallery').innerHTML = visible.map(card => {
+  const renderCards = group => group.map(card => {
     const quantity = quantities.get(String(card.id)) || 0;
     const logicalQuantity = codeTotals.get(card.code)?.quantity || 0;
     const limit = card.type === 'role' ? 1 : 3;
     return `<article class="card ${quantity ? 'chosen' : ''}" data-id="${escapeHtml(card.id)}">
       <button class="image-button" data-show="${escapeHtml(card.id)}" aria-label="查看 ${escapeHtml(card.name)} 大图"><img src="${escapeHtml(card.image)}" alt="${escapeHtml(card.name)} ${escapeHtml(card.id)}" loading="lazy"></button>
       <div class="card-title"><h3 title="${escapeHtml(card.name)}">${escapeHtml(card.name)}</h3><span>${escapeHtml(card.rarity)}</span></div>
-      <div class="card-meta"><span>${escapeHtml(card.code)}</span><span>${card.type === 'role' ? `角色 · ${escapeHtml(card.level)}级` : '行动'}</span></div>
+      <div class="card-meta"><span>${escapeHtml(card.code)}</span><span>${escapeHtml(cardSetLabel(card))} · ${card.type === 'role' ? `角色 ${escapeHtml(card.level)}级` : '行动'}</span></div>
       <div class="code-limit ${logicalQuantity > limit ? 'over' : ''}">同编号合计 ${logicalQuantity} / ${limit}</div>
       <div class="counter"><button data-delta="-1" aria-label="减少 ${escapeHtml(card.id)} 份数">−</button><input type="number" min="0" max="99" value="${quantity}" aria-label="${escapeHtml(card.code)} ${escapeHtml(card.rarity)} 份数"><button data-delta="1" aria-label="增加 ${escapeHtml(card.id)} 份数">＋</button></div>
     </article>`;
-  }).join('') || '<p class="empty">没有匹配的卡牌。</p>';
+  }).join('');
+  const roles = visible.filter(card => card.type === 'role');
+  const actions = visible.filter(card => card.type === 'action');
+  $('gallery').innerHTML = visible.length ? `${roles.length ? `<section class="card-section"><h2>角色卡组 <small>${roles.length} 个版本</small></h2><div class="card-grid">${renderCards(roles)}</div></section>` : ''}${actions.length ? `<section class="card-section"><h2>行动卡组 <small>${actions.length} 个版本</small></h2><div class="card-grid">${renderCards(actions)}</div></section>` : ''}` : '<p class="empty">没有匹配的卡牌。</p>';
+}
+
+function renderQuantityChange(id) {
+  if ($('selected').checked) {
+    renderGallery();
+  } else {
+    const card = cardsById.get(String(id));
+    const quantity = quantities.get(String(id)) || 0;
+    const article = $('gallery').querySelector(`article[data-id="${CSS.escape(String(id))}"]`);
+    if (article) {
+      article.classList.toggle('chosen', Boolean(quantity));
+      const input = article.querySelector('input');
+      if (input) input.value = quantity;
+    }
+    if (card) {
+      const logicalQuantity = aggregateCodes().get(card.code)?.quantity || 0;
+      const limit = card.type === 'role' ? 1 : 3;
+      for (const version of cards.filter(item => item.code === card.code)) {
+        const row = $('gallery').querySelector(`article[data-id="${CSS.escape(String(version.id))}"] .code-limit`);
+        if (row) {
+          row.textContent = `同编号合计 ${logicalQuantity} / ${limit}`;
+          row.classList.toggle('over', logicalQuantity > limit);
+        }
+      }
+    }
+  }
+  renderValidation();
+  updatePrintStats();
+  $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'} · 未保存`;
 }
 
 function renderValidation() {
@@ -328,7 +414,7 @@ function formatDate(value) {
 
 function deckCounts(deck) {
   const source = new Map(Object.entries(cleanQuantities(deck.cards)));
-  const analysis = analyzeDeck(source);
+  const analysis = analyzeDeck(source, deck.environment);
   return `${analysis.roleTotal} 张角色卡 · ${analysis.actionTotal} 张行动卡`;
 }
 
@@ -338,6 +424,7 @@ function cloudRowToDeck(row) {
     ownerId: row.owner_id,
     name: row.name,
     description: row.description,
+    environment: row.environment,
     cards: row.cards,
     isPublic: row.is_public,
     authorName: row.author_name,
@@ -352,6 +439,7 @@ function cloudDeckRow(deck, isPublic = deck.isPublic) {
     owner_id: authUser.id,
     name: deck.name,
     description: deck.description,
+    environment: deck.environment,
     cards: deck.cards,
     is_public: Boolean(isPublic),
     author_name: String(authUser.user_metadata?.display_name || '玩家').slice(0, 40),
@@ -391,23 +479,102 @@ async function loadMyCloudDecks() {
   renderSavedDecks();
 }
 
-async function loadCommunityDecks() {
+async function loadCommunityDecks({ reset = true } = {}) {
+  if (communityLoading) return;
+  communityLoading = true;
+  $('loadMoreCommunity').disabled = true;
   if (!cloud) {
     communityDecks = [];
+    communityState = 'ready';
     renderPublishedDecks();
+    communityLoading = false;
+    $('loadMoreCommunity').disabled = false;
     return;
   }
-  const { data, error } = await cloud.from('decks').select('*').eq('is_public', true).order('updated_at', { ascending: false }).limit(50);
-  if (error) throw error;
-  communityDecks = (data || []).map(cloudRowToDeck).filter(Boolean);
+  const environment = $('communityEnvironment').value;
+  const cacheKey = environment || 'all';
+  if (reset && communityCache.has(cacheKey)) {
+    communityDecks = communityCache.get(cacheKey);
+    communityState = 'ready';
+    renderPublishedDecks();
+  } else if (reset) {
+    communityState = 'loading';
+    communityError = '';
+    renderPublishedDecks();
+  }
+  const requestId = ++communityRequestId;
+  const page = reset ? 0 : communityPage + 1;
+  let query = cloud.from('decks').select('*').eq('is_public', true).order('updated_at', { ascending: false });
+  if (environment) query = query.eq('environment', environment);
+  const from = page * COMMUNITY_PAGE_SIZE;
+  const { data, error } = await query.range(from, from + COMMUNITY_PAGE_SIZE);
+  if (requestId !== communityRequestId) {
+    communityLoading = false;
+    $('loadMoreCommunity').disabled = false;
+    return;
+  }
+  if (error) {
+    communityState = 'error';
+    communityError = error.message;
+    renderPublishedDecks();
+    communityLoading = false;
+    $('loadMoreCommunity').disabled = false;
+    return;
+  }
+  const rows = (data || []).map(cloudRowToDeck).filter(Boolean);
+  communityPage = page;
+  communityHasMore = rows.length > COMMUNITY_PAGE_SIZE;
+  const visibleRows = rows.slice(0, COMMUNITY_PAGE_SIZE);
+  communityDecks = reset ? visibleRows : [...communityDecks, ...visibleRows];
+  communityCache.set(cacheKey, communityDecks);
+  communityState = 'ready';
+  communityError = '';
   renderPublishedDecks();
+  communityLoading = false;
+  $('loadMoreCommunity').disabled = false;
+}
+
+function deckCoverCards(deck) {
+  const seenCodes = new Set();
+  return Object.entries(cleanQuantities(deck.cards)).flatMap(([id, quantity]) => {
+    const card = cardsById.get(String(id));
+    if (!quantity || !card || card.type !== 'role' || String(card.level) !== '0' || seenCodes.has(card.code)) return [];
+    seenCodes.add(card.code);
+    return [card];
+  }).slice(0, 3);
+}
+
+function deckCoverHtml(deck) {
+  const covers = deckCoverCards(deck);
+  return `<div class="deck-covers" aria-label="0级角色卡预览">${covers.length
+    ? covers.map(card => `<img class="deck-cover" src="${escapeHtml(card.image)}" alt="${escapeHtml(card.name)} 0级角色卡" loading="lazy">`).join('')
+    : '<span class="deck-cover-placeholder">暂无<br>0级角色</span>'}</div>`;
+}
+
+async function loadSiteStats(incrementVisit = false) {
+  if (!cloud) return false;
+  const { data, error } = await cloud.rpc('get_site_stats', { increment_visit: incrementVisit });
+  if (error) return false;
+  const stats = Array.isArray(data) ? data[0] : data;
+  if (!stats) return false;
+  $('visitCount').textContent = Number(stats.total_visits || 0).toLocaleString('zh-CN');
+  $('registrationCount').textContent = Number(stats.total_registrations || 0).toLocaleString('zh-CN');
+  return true;
+}
+
+async function initializeSiteStats() {
+  let incrementVisit = true;
+  try { incrementVisit = sessionStorage.getItem(VISIT_SESSION_KEY) !== '1'; } catch {}
+  if (await loadSiteStats(incrementVisit) && incrementVisit) {
+    try { sessionStorage.setItem(VISIT_SESSION_KEY, '1'); } catch {}
+  }
 }
 
 async function refreshCloudDecks() {
   if (!cloud || cloudBusy) return;
   cloudBusy = true;
   try {
-    await Promise.all([loadMyCloudDecks(), loadCommunityDecks()]);
+    await Promise.all([loadMyCloudDecks(), loadCommunityDecks({ reset: true })]);
   } catch (error) {
     setStatus(`云端数据读取失败：${error.message}`, 'error');
   } finally {
@@ -419,7 +586,7 @@ function renderSavedDecks() {
   const saved = authUser ? cloudDecks : readStorage(STORAGE_KEY).map(item => normalizeDeck(item)).filter(Boolean);
   const source = authUser ? 'cloud' : 'local';
   $('savedDecks').innerHTML = saved.length ? saved.map(deck => `<article class="deck-row">
-    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="${source}-badge">${source === 'cloud' ? '云端' : '本机'}</span>${deck.isPublic ? '<span class="public-badge">已公开</span>' : ''}<span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
+    ${deckCoverHtml(deck)}<div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="${source}-badge">${source === 'cloud' ? '云端' : '本机'}</span><span class="public-badge">${escapeHtml(environmentLabel(deck.environment))}</span>${deck.isPublic ? '<span class="public-badge">已公开</span>' : ''}<span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
     <div class="row-actions"><button data-load-deck="${escapeHtml(deck.id)}" data-source="${source}">查看 / 编辑</button><button data-copy-deck="${escapeHtml(deck.id)}" data-source="${source}">复制</button><button data-share-deck="${escapeHtml(deck.id)}" data-source="${source}">${source === 'cloud' ? '发布' : '分享'}</button><button class="danger" data-delete-deck="${escapeHtml(deck.id)}" data-source="${source}">删除</button></div>
   </article>`).join('') : `<p class="empty-panel">${authUser ? '账号中还没有卡组。编辑一副卡组后点击“保存卡组”。' : '还没有保存的卡组。编辑一副卡组后点击“保存卡组”。'}</p>`;
 }
@@ -427,16 +594,26 @@ function renderSavedDecks() {
 function renderPublishedDecks() {
   if (cloud) {
     $('publishedDecksHeading').textContent = '公开卡组广场';
+    $('loadMoreCommunity').hidden = true;
+    if (communityState === 'loading' || communityState === 'idle') {
+      $('publishedDecks').innerHTML = '<div class="loading-panel" aria-label="正在加载公开卡组"><div class="loading-bar"></div><div class="loading-bar"></div><div class="loading-bar"></div></div>';
+      return;
+    }
+    if (communityState === 'error') {
+      $('publishedDecks').innerHTML = `<p class="empty-panel">公开卡组加载失败：${escapeHtml(communityError)}<br>请点击上方“刷新”重试。</p>`;
+      return;
+    }
     $('publishedDecks').innerHTML = communityDecks.length ? communityDecks.map(deck => `<article class="deck-row">
-      <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="public-badge">${escapeHtml(deck.authorName)}</span><span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
+      ${deckCoverHtml(deck)}<div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="public-badge">${escapeHtml(environmentLabel(deck.environment))}</span><span class="public-badge">${escapeHtml(deck.authorName)}</span><span>${escapeHtml(deckCounts(deck))} · 更新于 ${escapeHtml(formatDate(deck.updatedAt))}</span></div>
       <div class="row-actions"><button data-load-community="${escapeHtml(deck.id)}" class="primary">查看并复制</button><button data-link-community="${escapeHtml(deck.id)}">复制链接</button></div>
-    </article>`).join('') : '<p class="empty-panel">公共卡组广场还没有内容。</p>';
+    </article>`).join('') : `<p class="empty-panel">${$('communityEnvironment').value ? environmentLabel($('communityEnvironment').value) : '当前筛选条件'}还没有公开卡组。</p>`;
+    $('loadMoreCommunity').hidden = !communityHasMore;
     return;
   }
   const published = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
   $('publishedDecksHeading').textContent = '本机分享记录';
   $('publishedDecks').innerHTML = published.length ? published.map(deck => `<article class="deck-row">
-    <div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span>${escapeHtml(deckCounts(deck))} · 分享于 ${escapeHtml(formatDate(deck.publishedAt || deck.updatedAt))}</span></div>
+    ${deckCoverHtml(deck)}<div><h2>${escapeHtml(deck.name)}</h2><p>${escapeHtml(deck.description || '暂无说明')}</p><span class="public-badge">${escapeHtml(environmentLabel(deck.environment))}</span><span>${escapeHtml(deckCounts(deck))} · 分享于 ${escapeHtml(formatDate(deck.publishedAt || deck.updatedAt))}</span></div>
     <div class="row-actions"><button data-load-published="${escapeHtml(deck.id)}">查看并复制</button><button data-link-published="${escapeHtml(deck.id)}">复制链接</button><button class="danger" data-delete-published="${escapeHtml(deck.id)}">删除记录</button></div>
   </article>`).join('') : '<p class="empty-panel">还没有分享记录。点击“分享当前卡组”生成公开链接。</p>';
 }
@@ -446,19 +623,15 @@ function renderIncomingDeck() {
     $('incomingDeck').innerHTML = '<div class="shared-placeholder"><strong>通过分享链接查看别人的卡组</strong><span>打开含有卡组数据的链接后，卡组详情会显示在这里。</span></div>';
     return;
   }
-  const analysis = analyzeDeck(new Map(Object.entries(incomingDeck.cards)));
+  const analysis = analyzeDeck(new Map(Object.entries(incomingDeck.cards)), incomingDeck.environment);
   const state = analysis.errors.length ? `草稿，${analysis.errors.length} 项基础规则未通过` : '基础规则通过';
-  $('incomingDeck').innerHTML = `<article class="shared-deck"><p class="eyebrow">收到的卡组</p><h2>${escapeHtml(incomingDeck.name)}</h2><p>${escapeHtml(incomingDeck.description || '暂无说明')}</p><div class="shared-meta"><span>${analysis.roleTotal} 张角色卡</span><span>${analysis.actionTotal} 张行动卡</span><span>${escapeHtml(state)}</span></div><div class="row-actions"><button id="copyIncoming" class="primary">复制到我的编辑器</button><button id="printIncoming">载入并打印</button></div></article>`;
+  $('incomingDeck').innerHTML = `<article class="shared-deck"><p class="eyebrow">收到的卡组</p><div class="shared-deck-layout">${deckCoverHtml(incomingDeck)}<div><h2>${escapeHtml(incomingDeck.name)}</h2><p>${escapeHtml(incomingDeck.description || '暂无说明')}</p><div class="shared-meta"><span>${escapeHtml(environmentLabel(incomingDeck.environment))}</span><span>${analysis.roleTotal} 张角色卡</span><span>${analysis.actionTotal} 张行动卡</span><span>${escapeHtml(state)}</span></div><div class="row-actions"><button id="copyIncoming" class="primary">复制到我的编辑器</button><button id="printIncoming">载入并打印</button></div></div></div></article>`;
 }
 
 function renderAll() {
   renderGallery();
   renderValidation();
   updatePrintStats();
-  renderPrintSummary();
-  renderSavedDecks();
-  renderPublishedDecks();
-  renderIncomingDeck();
   updateAccountUi();
   $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'}${dirty ? ' · 未保存' : ''}`;
 }
@@ -497,19 +670,54 @@ function loadDeck(deck, copy = false, destination = 'editor') {
   $('search').value = '';
   $('type').value = '';
   $('rarity').value = '';
+  $('cardSet').value = '';
   $('selected').checked = true;
   $('deckName').value = copy ? `${normalized.name}（副本）`.slice(0, 40) : normalized.name;
   $('deckDescription').value = normalized.description;
+  $('deckEnvironment').value = normalized.environment;
   activeDeckId = copy ? null : normalized.id;
   dirty = copy;
-  persistDraft();
+  persistDraftNow();
   renderAll();
   setView(destination);
   $('deckNote').textContent = '当前只显示这副卡组实际使用的卡；取消“只看已选”即可继续添加其他卡。';
   setStatus(copy ? '已复制到编辑器，并只显示卡组中已有的卡。' : `已载入“${normalized.name}”，当前只显示卡组中已有的卡。`, 'success');
 }
 
+function confirmAction({ title, eyebrow = 'CONFIRM', content, acceptText = '确认' }) {
+  return new Promise(resolve => {
+    const dialog = $('confirmDialog');
+    $('confirmTitle').textContent = title;
+    $('confirmEyebrow').textContent = eyebrow;
+    $('confirmContent').innerHTML = content;
+    $('confirmAccept').textContent = acceptText;
+    let accepted = false;
+    const accept = () => { accepted = true; dialog.close(); };
+    const cancel = () => dialog.close();
+    const closed = () => {
+      $('confirmAccept').removeEventListener('click', accept);
+      $('confirmCancel').removeEventListener('click', cancel);
+      resolve(accepted);
+    };
+    $('confirmAccept').addEventListener('click', accept);
+    $('confirmCancel').addEventListener('click', cancel);
+    dialog.addEventListener('close', closed, { once: true });
+    dialog.showModal();
+  });
+}
+
+function deckConfirmationContent(deck) {
+  const analysis = analyzeDeck(new Map(Object.entries(deck.cards)), deck.environment);
+  const state = analysis.errors.length ? `${analysis.errors.length} 项基础规则未通过` : '基础规则通过';
+  return `<p><strong>${escapeHtml(deck.name)}</strong></p><ul><li>${escapeHtml(environmentLabel(deck.environment))}</li><li>${analysis.roleTotal} 张角色卡，${analysis.actionTotal} 张行动卡</li><li>${escapeHtml(state)}</li></ul>`;
+}
+
 async function saveCurrentDeck() {
+  if (saveBusy) return;
+  const draft = currentSnapshot();
+  if (!await confirmAction({ title: '保存这副卡组？', eyebrow: 'SAVE DECK', content: deckConfirmationContent(draft), acceptText: '确认保存' })) return;
+  saveBusy = true;
+  ['saveCurrent', 'saveCurrentTop'].forEach(id => { $(id).disabled = true; });
   try {
     let snapshot;
     if (cloud && authUser) {
@@ -530,16 +738,21 @@ async function saveCurrentDeck() {
     }
     activeDeckId = snapshot.id;
     dirty = false;
-    persistDraft();
+    persistDraftNow();
     renderAll();
+    renderSavedDecks();
     setStatus(`已保存“${snapshot.name}”到${authUser ? '你的账号' : '这台设备'}。`, 'success');
+    setView('saved');
   } catch (error) {
     setStatus(`保存失败：${error.message}`, 'error');
+  } finally {
+    saveBusy = false;
+    ['saveCurrent', 'saveCurrentTop'].forEach(id => { $(id).disabled = false; });
   }
 }
 
 function encodeDeck(deck) {
-  const payload = JSON.stringify({ v: 1, name: deck.name, description: deck.description, cards: Object.entries(deck.cards) });
+  const payload = JSON.stringify({ v: 2, name: deck.name, description: deck.description, environment: deck.environment, cards: Object.entries(deck.cards) });
   const bytes = new TextEncoder().encode(payload);
   let binary = '';
   bytes.forEach(byte => { binary += String.fromCharCode(byte); });
@@ -552,8 +765,8 @@ function decodeDeck(encoded) {
     const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
     const bytes = Uint8Array.from(atob(padded), char => char.charCodeAt(0));
     const parsed = JSON.parse(new TextDecoder().decode(bytes));
-    if (parsed.v !== 1) return null;
-    return normalizeDeck({ name: parsed.name, description: parsed.description, cards: parsed.cards });
+    if (![1, 2].includes(parsed.v)) return null;
+    return normalizeDeck({ name: parsed.name, description: parsed.description, environment: parsed.environment || 'bp01', cards: parsed.cards });
   } catch {
     return null;
   }
@@ -583,9 +796,15 @@ async function copyText(value) {
 }
 
 async function publishDeck(deck = currentSnapshot()) {
+  if (shareBusy) return;
   let snapshot = normalizeDeck(deck);
+  if (!await confirmAction({ title: '公开分享这副卡组？', eyebrow: 'SHARE DECK', content: `${deckConfirmationContent(snapshot)}<p>确认后，卡组名称、说明、环境、作者昵称和卡牌清单会公开显示。</p>`, acceptText: '确认分享' })) return;
+  shareBusy = true;
+  $('shareCurrent').disabled = true;
+  document.querySelectorAll('[data-share-deck]').forEach(button => { button.disabled = true; });
   let url;
-  if (cloud && authUser) {
+  try {
+    if (cloud && authUser) {
     try {
       const owned = cloudDecks.find(item => item.id === snapshot.id);
       snapshot = normalizeDeck({ ...snapshot, id: owned?.id || makeId(), createdAt: owned?.createdAt || snapshot.createdAt, isPublic: true });
@@ -601,20 +820,29 @@ async function publishDeck(deck = currentSnapshot()) {
       setStatus(`发布失败：${error.message}`, 'error');
       return;
     }
-  } else {
+    } else {
     url = shareUrl(snapshot);
     const records = readStorage(PUBLICATIONS_KEY).map(item => normalizeDeck(item)).filter(Boolean);
     records.unshift({ ...snapshot, id: makeId(), shareUrl: url, publishedAt: new Date().toISOString() });
     writeStorage(PUBLICATIONS_KEY, records.slice(0, 30));
-  }
-  $('shareLinkOutput').value = url;
-  $('shareResult').hidden = false;
-  renderPublishedDecks();
-  try {
-    await copyText(url);
-    setStatus(`${cloud && authUser ? '卡组已发布到公共广场，' : ''}分享链接已复制。`, 'success');
-  } catch {
-    setStatus('无法自动复制，请手动复制页面中显示的分享链接。', 'error');
+    }
+    $('shareLinkOutput').value = url;
+    $('shareCompleteLink').value = url;
+    $('shareResult').hidden = false;
+    renderPublishedDecks();
+    try {
+      await copyText(url);
+      setStatus(`${cloud && authUser ? '卡组已发布到公共广场，' : ''}分享链接已复制。`, 'success');
+    } catch {
+      setStatus('卡组已分享，请在完成窗口中手动复制链接。', 'success');
+    }
+    $('shareCompleteDialog').showModal();
+  } catch (error) {
+    setStatus(`分享失败：${error.message}`, 'error');
+  } finally {
+    shareBusy = false;
+    $('shareCurrent').disabled = false;
+    document.querySelectorAll('[data-share-deck]').forEach(button => { button.disabled = false; });
   }
 }
 
@@ -627,6 +855,8 @@ async function initializeIncomingDeck() {
     }
     const { data, error } = await cloud.from('decks').select('*').eq('id', cloudMatch[1]).eq('is_public', true).single();
     if (error || !data) {
+      incomingDeck = null;
+      renderIncomingDeck();
       setStatus('找不到这副公开卡组，它可能已被取消公开。', 'error');
       return;
     }
@@ -636,10 +866,17 @@ async function initializeIncomingDeck() {
     return;
   }
   const match = location.hash.match(/^#deck=([A-Za-z0-9_-]+)$/);
-  if (!match) return;
+  if (!match) {
+    incomingDeck = null;
+    renderIncomingDeck();
+    return;
+  }
   incomingDeck = decodeDeck(match[1]);
   if (incomingDeck) setView('community');
-  else setStatus('分享链接中的卡组数据无效或已经损坏。', 'error');
+  else {
+    renderIncomingDeck();
+    setStatus('分享链接中的卡组数据无效或已经损坏。', 'error');
+  }
 }
 
 function authCredentials() {
@@ -718,6 +955,7 @@ $('signUpButton').addEventListener('click', async () => {
   } else {
     setAuthMessage('注册成功。请打开验证邮件并点击其中的链接，然后返回登录。', 'success');
   }
+  void loadSiteStats(false);
 });
 
 $('signOutButton').addEventListener('click', async () => {
@@ -749,7 +987,7 @@ $('gallery').addEventListener('click', event => {
   try {
     const next = Math.max(0, Math.min(99, (quantities.get(id) || 0) + Number(button.dataset.delta)));
     setQuantity(id, next);
-    renderAll();
+    renderQuantityChange(id);
   } catch (error) {
     setStatus(error.message, 'error');
   }
@@ -758,16 +996,24 @@ $('gallery').addEventListener('click', event => {
 $('gallery').addEventListener('change', event => {
   if (!event.target.matches('input')) return;
   try {
-    setQuantity(event.target.closest('article').dataset.id, Number(event.target.value));
-    renderAll();
+    const id = event.target.closest('article').dataset.id;
+    setQuantity(id, Number(event.target.value));
+    renderQuantityChange(id);
   } catch (error) {
     setStatus(error.message, 'error');
   }
 });
 
-for (const id of ['search', 'type', 'selected', 'rarity', 'sort']) $(id).addEventListener('input', renderGallery);
+let searchTimer = null;
+$('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(renderGallery, 200); });
+for (const id of ['type', 'selected', 'cardSet', 'rarity', 'sort']) $(id).addEventListener('input', renderGallery);
 for (const id of ['width', 'height', 'gap', 'marks']) $(id).addEventListener('input', updatePrintStats);
 for (const id of ['deckName', 'deckDescription']) $(id).addEventListener('input', () => { markDirty(); $('headerDeckName').textContent = `${$('deckName').value.trim() || '未命名卡组'} · 未保存`; });
+$('deckEnvironment').addEventListener('change', () => {
+  markDirty();
+  renderAll();
+  $('deckNote').textContent = `当前使用${environmentLabel($('deckEnvironment').value)}；卡牌图鉴已按该环境过滤。`;
+});
 for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => setView(button.dataset.view));
 for (const button of document.querySelectorAll('[data-go-editor]')) button.addEventListener('click', () => setView('editor'));
 
@@ -834,6 +1080,14 @@ for (const id of ['saveCurrent', 'saveCurrentTop']) $(id).addEventListener('clic
 $('goPrint').addEventListener('click', () => setView('print'));
 $('shareCurrent').addEventListener('click', () => publishDeck());
 $('closeImage').addEventListener('click', () => $('lightbox').close());
+$('communityEnvironment').addEventListener('change', () => { communityPage = 0; void loadCommunityDecks({ reset: true }); });
+$('refreshCommunity').addEventListener('click', () => { communityCache.delete($('communityEnvironment').value || 'all'); void loadCommunityDecks({ reset: true }); });
+$('loadMoreCommunity').addEventListener('click', () => { if (communityHasMore && communityState !== 'loading') void loadCommunityDecks({ reset: false }); });
+$('copyCompletedShare').addEventListener('click', async () => {
+  try { await copyText($('shareCompleteLink').value); setStatus('分享链接已复制。', 'success'); }
+  catch { setStatus('无法访问剪贴板，请手动复制链接。', 'error'); }
+});
+$('finishShare').addEventListener('click', () => $('shareCompleteDialog').close());
 
 $('savedDecks').addEventListener('click', async event => {
   const button = event.target.closest('button');
@@ -970,18 +1224,31 @@ async function preparePreview() {
   }
 }
 
-async function imageAsJpeg(card) {
-  const image = new Image();
-  image.src = card.image;
-  await image.decode();
+async function imageAsJpeg(card, widthMm, heightMm) {
+  let response;
+  try {
+    response = await fetch(new URL(card.image, location.href), { cache: 'force-cache' });
+  } catch {
+    throw Error(`无法读取卡图 ${card.code}（${card.rarity}）。`);
+  }
+  if (!response.ok) throw Error(`卡图 ${card.code}（${card.rarity}）加载失败：HTTP ${response.status}`);
+  const source = await response.blob();
+  const image = await createImageBitmap(source);
   const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  canvas.width = Math.max(1, Math.round(widthMm / 25.4 * 300));
+  canvas.height = Math.max(1, Math.round(heightMm / 25.4 * 300));
   const context = canvas.getContext('2d', { alpha: false });
   context.fillStyle = '#fff';
   context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0);
-  return canvas.toDataURL('image/jpeg', 0.94);
+  const scale = Math.min(canvas.width / image.width, canvas.height / image.height);
+  const width = image.width * scale;
+  const height = image.height * scale;
+  context.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+  image.close();
+  const jpeg = await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('卡图转换失败。')), 'image/jpeg', 0.9));
+  canvas.width = 1;
+  canvas.height = 1;
+  return new Uint8Array(await jpeg.arrayBuffer());
 }
 
 function drawCropMarks(pdf, x, y, width, height) {
@@ -1009,6 +1276,8 @@ async function downloadPdf() {
     const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true, putOnlyUsedFonts: true });
     pdf.setProperties({ title: `${$('deckName').value.trim() || '鸣潮对决'}打印文件`, subject: `${items.length} 张卡牌，${page.width} × ${page.height} mm` });
     const cache = new Map();
+    const remaining = new Map();
+    items.forEach(card => remaining.set(String(card.id), (remaining.get(String(card.id)) || 0) + 1));
     for (let index = 0; index < items.length; index += 1) {
       const card = items[index];
       const sheetIndex = Math.floor(index / page.capacity);
@@ -1020,10 +1289,13 @@ async function downloadPdf() {
       if (!jpeg) {
         setStatus(`正在生成彩色 PDF：${index + 1} / ${items.length} 张…`);
         await new Promise(requestAnimationFrame);
-        jpeg = await imageAsJpeg(card);
+        jpeg = await imageAsJpeg(card, page.width, page.height);
         cache.set(card.id, jpeg);
       }
       pdf.addImage(jpeg, 'JPEG', x, y, page.width, page.height, `card-${card.id}`, 'FAST');
+      const left = remaining.get(String(card.id)) - 1;
+      remaining.set(String(card.id), left);
+      if (!left) cache.delete(card.id);
       if ($('marks').checked) drawCropMarks(pdf, x, y, page.width, page.height);
       if (position === page.capacity - 1 || index === items.length - 1) {
         pdf.setFontSize(7);
@@ -1093,6 +1365,13 @@ for (const rarity of rarities) {
 
 restoreDraft();
 renderAll();
+renderSavedDecks();
+renderPublishedDecks();
+renderIncomingDeck();
 void initializeCloud();
 void initializeIncomingDeck();
+void initializeSiteStats();
+setInterval(() => { if (!document.hidden) void loadSiteStats(false); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void loadSiteStats(false); });
 window.addEventListener('hashchange', () => { void initializeIncomingDeck(); });
+window.addEventListener('pagehide', persistDraftNow);
